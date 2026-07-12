@@ -1,0 +1,22 @@
+{
+  "name": "woff2sfnt-sfnt2woff",
+  "version": "1.0.0",
+  "description": "SFNT to WOFF / WOFF to SFNT Converter",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/digi3colin/woff2sfnt-sfnt2woff.git"
+  },
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/digi3colin/woff2sfnt-sfnt2woff/issues"
+  },
+  "homepage": "https://github.com/digi3colin/woff2sfnt-sfnt2woff#readme",
+  "dependencies": {
+    "pako": "^1.0.7"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "safedoc",
+  "version": "1.0.0",
+  "description": "개인 PC용 개인정보 비식별화 프로그램",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "subset-font": "^2.5.0",
+    "vite": "^6.3.5",
+    "vite-plugin-singlefile": "^2.2.0",
+    "vitest": "^3.1.4"
+  },
+  "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
+    "fflate": "^0.8.2",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.1.200"
+  }
+}

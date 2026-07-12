@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- 콘텐츠 보안정책: 외부 통신 차단 (기술명세서 Ⅻ-2). 단일 HTML 인라인 스크립트를 위해 unsafe-inline 허용 -->
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data: blob:; media-src 'none'; frame-src 'none'; object-src 'none';" />
+  <title>개인정보 비식별화 프로그램</title>
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-title">
+      <h1>개인정보 비식별화 프로그램</h1>
+      <span class="version" id="version-info"></span>
+    </div>
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="deidentify">비식별 처리</button>
+      <button class="tab-btn" data-tab="restore">원본 복원</button>
+      <button class="tab-btn" data-tab="settings">설정</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ============ 비식별 처리 탭 ============ -->
+    <section id="tab-deidentify" class="tab-panel active">
+
+      <!-- 1단계: 메인(업로드) 화면 -->
+      <div id="screen-main" class="screen active">
+        <div class="step-indicator">
+          <span class="step current">1. 문서 선택</span><span class="step">2. 분석</span><span class="step">3. 검토</span><span class="step">4. 결과</span>
+        </div>
+        <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="문서 선택 또는 끌어놓기">
+          <p class="drop-main">문서를 이곳에 끌어놓거나 클릭하여 선택하십시오</p>
+          <p class="drop-sub">지원 형식: TXT, CSV, XLSX, DOCX, HWPX, 텍스트 PDF</p>
+          <input type="file" id="file-input" accept=".txt,.csv,.xlsx,.docx,.hwpx,.pdf" hidden />
+        </div>
+        <div class="notice-box">
+          <h3>안내사항</h3>
+          <ul>
+            <li>모든 처리는 이 PC의 브라우저 안에서만 수행되며, <strong>문서와 개인정보는 외부로 전송되지 않습니다.</strong></li>
+            <li>비식별 결과 파일에는 원문이 남지 않습니다. 복원이 필요한 경우 <strong>대응표 파일을 반드시 함께 보관</strong>하십시오.</li>
+            <li>대응표 파일에는 개인정보 원문이 포함되므로 안전한 위치에 보관해야 합니다.</li>
+            <li>업로드한 원본 파일은 변경되지 않습니다. 원본은 별도로 안전하게 보관하십시오.</li>
+            <li>지원 제외: 구형 HWP, 암호·DRM 문서, 스캔 이미지 PDF, 실행파일·압축파일</li>
+            <li>PDF 결과는 페이지를 이미지로 재생성하므로 검색·복사와 대응표를 이용한 파일 복원을 지원하지 않습니다.</li>
+            <li>최대 파일 크기: 20MB (10MB 초과 시 처리 속도가 느려질 수 있습니다)</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 2단계: 분석 화면 -->
+      <div id="screen-analyze" class="screen">
+        <div class="step-indicator">
+          <span class="step done">1. 문서 선택</span><span class="step current">2. 분석</span><span class="step">3. 검토</span><span class="step">4. 결과</span>
+        </div>
+        <div class="panel">
+          <h2>문서 분석 중</h2>
+          <div id="analyze-file-info" class="file-info"></div>
+          <div class="progress-bar"><div id="analyze-progress" class="progress-fill"></div></div>
+          <p id="analyze-status" class="status-text">파일을 읽는 중...</p>
+          <button id="btn-cancel-analyze" class="btn secondary">분석 취소</button>
+        </div>
+      </div>
+
+      <!-- 3단계: 검토 화면 -->
+      <div id="screen-review" class="screen">
+        <div class="step-indicator">
+          <span class="step done">1. 문서 선택</span><span class="step done">2. 분석</span><span class="step current">3. 검토</span><span class="step">4. 결과</span>
+        </div>
+        <div class="review-toolbar">
+          <div class="toolbar-group">
+            <input type="text" id="search-input" placeholder="문자열 검색 후 일괄 지정" />
+            <select id="search-type"></select>
+            <button id="btn-search-add" class="btn small">검색 일괄 지정</button>
+          </div>
+          <div class="toolbar-group">
+            <button id="btn-add-selection" class="btn small" title="미리보기에서 문자열을 드래그한 후 누르십시오">선택 영역을 개인정보로 추가</button>
+            <select id="add-type"></select>
+          </div>
+          <div class="toolbar-group">
+            <button id="btn-undo" class="btn small secondary">되돌리기</button>
+            <span id="detect-count-badge" class="badge"></span>
+          </div>
+        </div>
+        <div class="review-layout">
+          <div class="preview-pane">
+            <h3>문서 미리보기</h3>
+            <div id="preview" class="preview-content" tabindex="0"></div>
+          </div>
+          <div class="list-pane">
+            <h3>개인정보 후보 목록</h3>
+            <div class="list-actions">
+              <button id="btn-select-all" class="btn tiny">전체 선택</button>
+              <button id="btn-deselect-all" class="btn tiny">전체 해제</button>
+            </div>
+            <div id="candidate-list" class="candidate-list"></div>
+          </div>
+        </div>
+        <div class="review-footer">
+          <label class="confirm-check">
+            <input type="checkbox" id="final-confirm" />
+            탐지 결과를 검토하였으며 비식별 처리에 동의합니다. (자동 탐지가 모든 개인정보를 찾지 못할 수 있습니다)
+          </label>
+          <button id="btn-execute" class="btn primary" disabled>비식별 실행</button>
+        </div>
+      </div>
+
+      <!-- 4단계: 결과 화면 -->
+      <div id="screen-result" class="screen">
+        <div class="step-indicator">
+          <span class="step done">1. 문서 선택</span><span class="step done">2. 분석</span><span class="step done">3. 검토</span><span class="step current">4. 결과</span>
+        </div>
+        <div id="unprocessed-warning" class="warning-box" hidden></div>
+        <div class="panel">
+          <h2>처리 결과</h2>
+          <div id="result-summary" class="result-summary"></div>
+          <div class="download-row">
+            <button id="btn-download-result" class="btn primary">결과 파일 다운로드</button>
+            <button id="btn-download-mapping" class="btn warning">대응표 다운로드 (민감정보 주의)</button>
+            <button id="btn-download-summary" class="btn secondary">처리결과 요약 다운로드</button>
+          </div>
+          <p class="mapping-warning">⚠ 대응표 파일에는 개인정보 <strong>원문이 평문으로 포함</strong>됩니다. 복원이 필요한 경우에만 내려받고, 결과 파일과 분리하여 안전하게 보관하십시오.</p>
+        </div>
+        <div class="compare-layout">
+          <div class="compare-pane"><h3>처리 전</h3><div id="compare-before" class="preview-content"></div></div>
+          <div class="compare-pane"><h3>처리 후</h3><div id="compare-after" class="preview-content"></div></div>
+        </div>
+        <div class="result-footer">
+          <button id="btn-new-doc" class="btn">새 문서 처리</button>
+          <button id="btn-finish" class="btn secondary">작업 종료 (작업정보 초기화)</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 복원 탭 ============ -->
+    <section id="tab-restore" class="tab-panel">
+      <div class="panel">
+        <h2>원본 복원</h2>
+        <p>비식별 처리된 문서와 함께 저장한 <strong>대응표 파일(JSON)</strong>을 이용해 치환값을 원문으로 되돌립니다.<br />
+          마스킹(<code>*</code>)·삭제 방식으로 처리된 항목은 복원할 수 없습니다.</p>
+        <div class="restore-inputs">
+          <label class="file-label">비식별 문서 (TXT/CSV/XLSX/DOCX/HWPX)
+            <input type="file" id="restore-doc-input" accept=".txt,.csv,.xlsx,.docx,.hwpx" />
+          </label>
+          <label class="file-label">대응표 파일 (JSON)
+            <input type="file" id="restore-map-input" accept=".json" />
+          </label>
+        </div>
+        <button id="btn-restore" class="btn primary" disabled>복원 실행</button>
+        <div id="restore-result" class="restore-result" hidden></div>
+      </div>
+    </section>
+
+    <!-- ============ 설정 탭 ============ -->
+    <section id="tab-settings" class="tab-panel">
+      <div class="panel">
+        <h2>유형별 기본 처리방식</h2>
+        <p class="muted">비식별 실행 시 각 개인정보 유형에 적용되는 기본 처리방식입니다. 후보별로 개별 변경할 수도 있습니다.</p>
+        <div id="policy-list" class="policy-list"></div>
+        <h2>사용자 정의 탐지 규칙</h2>
+        <p class="muted">정규표현식으로 탐지 규칙을 추가할 수 있습니다. (예: 사번 <code>EMP-\d{6}</code>)</p>
+        <div class="toolbar-group">
+          <input type="text" id="rule-name" placeholder="규칙 이름" />
+          <input type="text" id="rule-pattern" placeholder="정규표현식" />
+          <button id="btn-add-rule" class="btn small">규칙 추가</button>
+        </div>
+        <ul id="rule-list" class="rule-list"></ul>
+        <div class="settings-footer">
+          <button id="btn-reset-settings" class="btn secondary">설정 초기화</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <span>모든 처리는 사용자 PC에서 수행됩니다 · 외부 전송 없음</span>
+  </footer>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
