@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(python -c ' *)",
-      "Bash(pip install *)"
+      "Bash(pip install *)",
+      "Bash(unzip -l \"test/개인정보_탐지_테스트.hwpx\")"
     ]
   }
 }
