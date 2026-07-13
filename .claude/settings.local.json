@@ -3,7 +3,34 @@
     "allow": [
       "Bash(python -c ' *)",
       "Bash(pip install *)",
-      "Bash(unzip -l \"test/개인정보_탐지_테스트.hwpx\")"
+      "Bash(unzip -l \"test/개인정보_탐지_테스트.hwpx\")",
+      "Read(//tmp/**)",
+      "Bash(unzip -v \"/d/Dev/safeDoc/test/개인정보_탐지_테스트.hwpx\")",
+      "Bash(python -c \"import hwpx\")",
+      "Bash(pip show *)",
+      "Bash(cat /tmp/hwpx_content.json)",
+      "mcp__hwp-control__hwp_ping_pong",
+      "mcp__hwp-control__hwp_create",
+      "mcp__hwp-control__hwp_insert_text",
+      "mcp__hwp-control__hwp_save",
+      "Read(//c/Users/COMTREE/AppData/Local/Temp/claude/D--Dev-safeDoc/ba3e6ceb-23a4-402c-843b-cf6a6f4ffac1/scratchpad/**)",
+      "Bash(unzip -v /c/Users/COMTREE/AppData/Local/Temp/claude/D--Dev-safeDoc/ba3e6ceb-23a4-402c-843b-cf6a6f4ffac1/scratchpad/hangul_out.hwpx)",
+      "Bash(xxd /c/Users/COMTREE/AppData/Local/Temp/claude/D--Dev-safeDoc/ba3e6ceb-23a4-402c-843b-cf6a6f4ffac1/scratchpad/hangul_out.hwpx)",
+      "Bash(python build_hwpx.py)",
+      "Bash(unzip -v built.hwpx)",
+      "Bash(unzip -p built.hwpx Contents/section0.xml)",
+      "Bash(python -c \"import xml.dom.minidom,zipfile; xml.dom.minidom.parseString\\(zipfile.ZipFile\\('built.hwpx'\\).read\\('Contents/section0.xml'\\)\\); print\\('section0.xml well-formed OK'\\)\")",
+      "mcp__hwp-control__hwp_close_document",
+      "mcp__hwp-control__hwp_open",
+      "mcp__hwp-control__hwp_get_text",
+      "Bash(cp /c/Users/COMTREE/AppData/Local/Temp/claude/D--Dev-safeDoc/ba3e6ceb-23a4-402c-843b-cf6a6f4ffac1/scratchpad/built.hwpx /d/Dev/safeDoc/test/개인정보_탐지_테스트.hwpx)",
+      "Bash(unzip -l /d/Dev/safeDoc/test/개인정보_탐지_테스트.hwpx)",
+      "Bash(node -e ' *)",
+      "Bash(npx --no-install jest test/xmlDoc.test.js)",
+      "Bash(node --test test/xmlDoc.test.js)",
+      "Bash(node_modules/.bin/vitest run *)",
+      "Bash(python -)",
+      "Bash(echo \"exit: $?\")"
     ]
   }
 }

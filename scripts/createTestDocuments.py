@@ -1,5 +1,5 @@
 from pathlib import Path
-from zipfile import ZipFile, ZIP_DEFLATED
+from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
 import re
 from xml.sax.saxutils import escape
 
@@ -131,7 +131,33 @@ def create_docx():
 
     doc.save(OUT / '개인정보_탐지_테스트.docx')
 
+# Hangul-authored template used as a structural base for the .hwpx fixture.
+# A hand-written skeleton (bare header/section, empty manifest, no content.hpf,
+# compressed mimetype) is NOT a valid OWPML package and Hangul rejects it with
+# "파일이 손상되었습니다". Instead we clone a real Hangul template and swap in only
+# section0.xml, referencing char/para/style IDs that already exist in its header.
+HWPX_TEMPLATE_GLOBS = [
+    r'C:\Program Files (x86)\Hnc\Office*\HOffice*\Shared\HwpTemplate\FrequentComponent\공문서_양식_템플릿_일반.hwpx',
+    r'C:\Program Files\Hnc\Office*\HOffice*\Shared\HwpTemplate\FrequentComponent\공문서_양식_템플릿_일반.hwpx',
+    r'C:\Program Files*\HNC\Office*\HOffice*\Shared\HwpTemplate\**\*.hwpx',
+]
+
+
+def _find_hwpx_template():
+    import glob
+    for pattern in HWPX_TEMPLATE_GLOBS:
+        for hit in glob.glob(pattern, recursive=True):
+            return Path(hit)
+    return None
+
+
 def create_hwpx():
+    template = _find_hwpx_template()
+    if template is None:
+        raise FileNotFoundError(
+            'HWPX 템플릿을 찾을 수 없습니다. 한글(HWP)이 설치된 환경에서 실행하거나 '
+            'HWPX_TEMPLATE_GLOBS 경로를 조정하세요.')
+
     paragraphs = [
         '개인정보 탐지 테스트 문서',
         '본 문서의 개인정보는 프로그램 시험용 가상 데이터입니다.',
@@ -140,16 +166,44 @@ def create_hwpx():
     paragraphs.extend(' | '.join(row) for row in ROWS)
     paragraphs.extend(EXTRA)
     paragraphs.append('민원인 홍길동의 연락처는 010-1234-5678이며 이메일은 hong.gildong@example.com입니다.')
-    body = ''.join(f'<hp:p><hp:run><hp:t>{escape(text)}</hp:t></hp:run></hp:p>' for text in paragraphs)
-    section = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section" xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">{body}</hs:sec>'''
-    header = '''<?xml version="1.0" encoding="UTF-8"?><hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"/>'''
-    with ZipFile(OUT / '개인정보_탐지_테스트.hwpx', 'w', ZIP_DEFLATED) as zf:
-        zf.writestr('mimetype', 'application/hwp+zip')
-        zf.writestr('version.xml', '<?xml version="1.0" encoding="UTF-8"?><hv:HCFVersion xmlns:hv="http://www.hancom.co.kr/hwpml/2011/version"/>')
-        zf.writestr('Contents/header.xml', header)
-        zf.writestr('Contents/section0.xml', section)
-        zf.writestr('META-INF/manifest.xml', '<?xml version="1.0" encoding="UTF-8"?><manifest/>')
+
+    with ZipFile(template, 'r') as zin:
+        ref_section = zin.read('Contents/section0.xml').decode('utf-8')
+        # opening <hs:sec ...> tag carries every namespace declaration we need
+        sec_open = re.match(r'^(.*?<hs:sec\b[^>]*>)', ref_section, re.S).group(1)
+        # the mandatory page-setup block (page size, margins, note/border props)
+        secpr = re.search(r'<hp:secPr\b.*?</hp:secPr>', ref_section, re.S).group(0)
+
+        # IDs known to exist in this template's header.xml
+        char_ref, para_ref, style_ref = '29', '1', '0'
+
+        def build_para(text, pid, first=False):
+            secpr_xml = secpr if first else ''
+            return (
+                f'<hp:p id="{pid}" paraPrIDRef="{para_ref}" styleIDRef="{style_ref}" '
+                f'pageBreak="0" columnBreak="0" merged="0">'
+                f'<hp:run charPrIDRef="{char_ref}">{secpr_xml}'
+                f'<hp:t>{escape(text)}</hp:t></hp:run></hp:p>')
+
+        body = ''.join(
+            build_para(text, 2000000000 + i, first=(i == 0))
+            for i, text in enumerate(paragraphs))
+        section = sec_open + body + '</hs:sec>'
+
+        # Rewrite the package verbatim, replacing only section0.xml.
+        # Preserving each entry's compression type keeps `mimetype` STORED and
+        # first, as the spec requires.
+        with ZipFile(OUT / '개인정보_탐지_테스트.hwpx', 'w') as zout:
+            for info in zin.infolist():
+                data = (section.encode('utf-8')
+                        if info.filename == 'Contents/section0.xml'
+                        else zin.read(info.filename))
+                zi = ZipInfo(info.filename, date_time=info.date_time)
+                zi.compress_type = info.compress_type
+                zi.external_attr = info.external_attr
+                zi.internal_attr = info.internal_attr
+                zi.create_system = info.create_system
+                zout.writestr(zi, data)
 
 def create_pdf():
     font_path = Path('C:/Windows/Fonts/malgun.ttf')
