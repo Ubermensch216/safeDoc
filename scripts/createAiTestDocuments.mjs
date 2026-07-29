@@ -20,7 +20,7 @@ mkdirSync(OUT, { recursive: true });
 
 // 면책 문구 자체가 오탐을 만들지 않도록 성씨 사전과 겹치는 단어를 피해 작성했다.
 // (예: "인적사항"은 '인'이 성씨 사전에 있어 모든 문서에서 성명으로 오탐된다)
-const DISCLAIMER = '※ 아래에 나오는 사람 이름과 번호, 주소는 모두 시험용으로 지어낸 가상 정보입니다.';
+const DISCLAIMER = '※ 아래에 나오는 사람 이름과 번호, 주소는 모두 시험용 가상 정보입니다.';
 
 const xmlEscape = (s) => s
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
