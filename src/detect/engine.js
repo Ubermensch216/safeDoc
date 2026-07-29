@@ -15,7 +15,7 @@ import { getContext } from './rules/helpers.js';
 export const RULE_VERSION = '1.0.0';
 
 // 유효성 검증이 있는 정형정보 유형 (중첩 처리 우선순위용)
-const STRUCTURED_TYPES = new Set([
+export const STRUCTURED_TYPES = new Set([
   'RRN', 'FOREIGNER_NO', 'PHONE_MOBILE', 'PHONE_LANDLINE', 'EMAIL',
   'CARD_NO', 'BUSINESS_NO', 'PASSPORT_NO', 'IP_ADDRESS',
 ]);

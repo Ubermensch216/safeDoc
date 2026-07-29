@@ -4,8 +4,9 @@
 
 ## 주요 특징
 
-- **완전 오프라인 처리** — 콘텐츠 보안정책(CSP)으로 외부 통신을 차단(`connect-src 'none'`)하며, 파일이 사용자 기기를 벗어나지 않습니다.
-- **단일 HTML 배포** — 빌드 결과물이 하나의 HTML 파일로 묶여, 별도 설치 없이 브라우저에서 바로 실행할 수 있습니다.
+- **폐쇄망 동작** — 콘텐츠 보안정책(CSP)이 외부 통신을 차단합니다. 허용되는 통신은 **이 PC 안의 AI 엔진(`localhost:11434`)** 하나뿐이며, 파일이 사용자 기기를 벗어나지 않습니다.
+- **규칙 + 로컬 AI 이중 탐지** — 정규식·검증 알고리즘이 정형정보를 잡고, 로컬 LLM([Ollama](https://ollama.com/) + `gemma4:e2b`)이 문맥을 판단해 규칙이 놓치는 성명·주소를 추가로 찾습니다. AI 없이 규칙만으로도 동작합니다.
+- **단일 HTML 배포** — 빌드 결과물이 하나의 HTML 파일로 묶입니다. 동봉된 `start.bat`이 이를 `http://localhost`로 열어 줍니다.
 - **다양한 문서 형식 지원** — TXT, CSV, XLSX, DOCX, HWPX, 텍스트 기반 PDF
 - **탐지 → 검토 → 비식별 → 결과**의 단계별 작업 흐름과 원본 복원 기능
 
@@ -26,6 +27,7 @@
 
 ## 기술 스택
 
+- [Ollama](https://ollama.com/) + `gemma4:e2b` — 로컬 LLM 문맥 탐지 (선택)
 - [Vite](https://vitejs.dev/) — 빌드 및 단일 HTML 번들링(`vite-plugin-singlefile`)
 - [pdf-lib](https://pdf-lib.js.org/) / [pdfjs-dist](https://mozilla.github.io/pdf.js/) — PDF 파싱 및 처리
 - [fflate](https://github.com/101arrowz/fflate) — XLSX/DOCX/HWPX(ZIP 기반) 압축 해제
@@ -55,7 +57,27 @@ npm run dev
 npm run build
 ```
 
-빌드 결과물은 `dist/`에 단일 HTML 파일로 생성됩니다. 해당 파일을 브라우저에서 직접 열어 오프라인으로 사용할 수 있습니다.
+빌드 결과물은 `dist/`에 단일 HTML 파일로 생성됩니다.
+
+### 실행
+
+```bash
+deploy/start.bat
+```
+
+`http://localhost:8080`으로 서버를 띄우고 브라우저를 엽니다.
+
+> **`dist/index.html`을 파일로 직접 열지(`file://`) 마십시오.** Ollama가 `file://` 출처(`Origin: null`)의 요청을 403으로 거부하므로 AI 탐지가 동작하지 않습니다. 규칙 기반 탐지만 쓸 경우에는 직접 열어도 무방합니다.
+
+### AI 탐지 준비
+
+```bash
+ollama pull gemma4:e2b
+```
+
+Ollama가 실행 중이면 `start.bat`이 자동으로 감지합니다. 모델이 없거나 Ollama가 꺼져 있으면 규칙 기반으로만 동작합니다.
+
+폐쇄망 배포 절차는 [deploy/README.txt](deploy/README.txt)를 참고하십시오.
 
 ### 시험
 
@@ -71,10 +93,13 @@ npm test
 src/
 ├── main.js            # 진입점 및 작업 흐름 제어
 ├── core/              # 파일 관리, 분석, 비식별, 복원, 대응표, 세션
-├── detect/            # 탐지 엔진 및 유형별 규칙(rules/)
+├── detect/            # 규칙 기반 탐지 엔진 및 유형별 규칙(rules/)
+├── ai/                # 로컬 LLM 탐지 계층(청킹, 검증, 병합)
 ├── parsers/           # 형식별 파서(txt, csv, pdf, xmlDoc, zip 등)
 ├── ui/                # DOM 렌더링
 └── assets/            # 토큰 글꼴 등 자원
+
+deploy/                # 폐쇄망 배포용 실행기(start.bat, serve.ps1)
 ```
 
 ## 개발 상태
@@ -85,3 +110,6 @@ src/
 
 - 이 프로그램은 개인정보를 다루므로, 신뢰할 수 있는 환경에서만 사용하십시오.
 - 비식별 처리 결과와 대응표(복원용)를 함께 보관하면 원본을 복원할 수 있으므로, 대응표는 별도로 안전하게 관리하십시오.
+- **네트워크 범위** — CSP `connect-src`가 `http://localhost:11434`, `http://127.0.0.1:11434` 두 개의 루프백 주소만 허용합니다. 문서 내용은 이 PC 안의 AI 엔진으로만 전달되며 외부로 나가지 않습니다.
+- **AI 탐지의 한계** — 로컬 LLM은 규칙이 놓치는 항목을 추가로 찾을 뿐, 모든 개인정보를 보장하지 않습니다. AI는 후보를 **추가만** 할 수 있고 사용자가 선택한 처리 대상을 자동으로 해제하지 않습니다. 문서에 삽입된 지시문으로 탐지를 무력화할 수 없도록 규칙 기반 결과는 항상 보존됩니다.
+- 최종 확인은 사람이 수행해야 합니다. 검토 화면의 결과를 반드시 확인하십시오.

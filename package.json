@@ -8,7 +8,10 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "eval": "node scripts/eval.mjs",
+    "eval:ai": "node scripts/eval.mjs --ai",
+    "serve": "powershell -NoProfile -ExecutionPolicy Bypass -File deploy/serve.ps1"
   },
   "devDependencies": {
     "subset-font": "^2.5.0",
