@@ -30,38 +30,49 @@ function markTitle(c) {
 }
 
 // 문서 텍스트 + 후보 목록 → 강조된 HTML (FR-401)
-export function buildPreviewHtml(text, candidates) {
-  const truncated = text.length > PREVIEW_CHAR_LIMIT;
-  const view = truncated ? text.slice(0, PREVIEW_CHAR_LIMIT) : text;
+export function buildPreviewHtml(text, candidates, {
+  start = 0,
+  limit = PREVIEW_CHAR_LIMIT,
+  includeNotice = true,
+} = {}) {
+  const safeStart = Math.max(0, Math.min(text.length, start));
+  const endOffset = Math.min(text.length, safeStart + limit);
+  const truncated = safeStart > 0 || endOffset < text.length;
+  const view = text.slice(safeStart, endOffset);
   const sorted = candidates
-    .filter((c) => c.start < view.length)
+    .filter((c) => c.start < endOffset && c.end > safeStart)
     .slice()
     .sort((a, b) => a.start - b.start);
 
   let html = '';
   let pos = 0;
   for (const c of sorted) {
-    if (c.start < pos) continue; // 중첩 방어 (병합 단계에서 정리되지만 한 번 더 확인)
-    html += escapeHtml(view.slice(pos, c.start));
-    const end = Math.min(c.end, view.length);
+    const relativeStart = Math.max(0, c.start - safeStart);
+    if (relativeStart < pos) continue; // 중첩 방어 (병합 단계에서 정리되지만 한 번 더 확인)
+    html += escapeHtml(view.slice(pos, relativeStart));
+    const end = Math.min(c.end - safeStart, view.length);
     html += `<mark class="${markClass(c)}" data-id="${c.id}" title="${escapeHtml(markTitle(c))}">`
-      + `${escapeHtml(view.slice(c.start, end))}</mark>`;
+      + `${escapeHtml(view.slice(relativeStart, end))}</mark>`;
     pos = end;
   }
   html += escapeHtml(view.slice(pos));
 
-  if (truncated) {
-    html += `\n\n<span class="muted">… 미리보기는 ${PREVIEW_CHAR_LIMIT.toLocaleString()}자까지만 표시됩니다. `
-      + '처리는 문서 전체에 적용됩니다.</span>';
+  if (truncated && includeNotice) {
+    html += `\n\n<span class="muted">… ${safeStart.toLocaleString()}~${endOffset.toLocaleString()}자 구간만 표시됩니다. `
+      + '검토 화면에서는 이전·다음 구간으로 이동할 수 있습니다.</span>';
   }
   return html;
 }
 
 export class PreviewHighlighter {
-  constructor(el) {
+  constructor(el, { onWindowChange } = {}) {
     this.el = el;
+    this.onWindowChange = onWindowChange;
     this.timer = null;
     this.pending = null;
+    this.windowStart = 0;
+    this.text = '';
+    this.candidates = [];
   }
 
   // 사용자가 미리보기에서 문자열을 드래그하는 중이면 다시 그리지 않는다
@@ -71,12 +82,23 @@ export class PreviewHighlighter {
     return this.el.contains(sel.anchorNode);
   }
 
-  renderNow(text, candidates) {
+  renderNow(text, candidates, { start = this.windowStart } = {}) {
     const top = this.el.scrollTop;
     const left = this.el.scrollLeft;
-    this.el.innerHTML = buildPreviewHtml(text, candidates);
+    this.text = text;
+    this.candidates = candidates;
+    this.windowStart = Math.max(0, Math.min(Math.max(0, text.length - 1), start));
+    this.el.innerHTML = buildPreviewHtml(text, candidates, {
+      start: this.windowStart,
+      includeNotice: false,
+    });
     this.el.scrollTop = top;
     this.el.scrollLeft = left;
+    this.onWindowChange?.({
+      start: this.windowStart,
+      end: Math.min(text.length, this.windowStart + PREVIEW_CHAR_LIMIT),
+      total: text.length,
+    });
   }
 
   // AI 결과가 연속으로 도착할 때 매번 다시 그리지 않도록 묶어서 처리한다
@@ -105,7 +127,15 @@ export class PreviewHighlighter {
 
   focus(id) {
     this.el.querySelectorAll('mark.pii.focused').forEach((m) => m.classList.remove('focused'));
-    const mark = this.el.querySelector(`mark.pii[data-id="${CSS.escape(id)}"]`);
+    let mark = this.el.querySelector(`mark.pii[data-id="${CSS.escape(id)}"]`);
+    if (!mark) {
+      const candidate = this.candidates.find((c) => c.id === id);
+      if (candidate) {
+        const start = Math.max(0, candidate.start - Math.floor(PREVIEW_CHAR_LIMIT / 2));
+        this.renderNow(this.text, this.candidates, { start });
+        mark = this.el.querySelector(`mark.pii[data-id="${CSS.escape(id)}"]`);
+      }
+    }
     if (mark) {
       mark.classList.add('focused');
       mark.scrollIntoView({ block: 'center' });
@@ -115,5 +145,16 @@ export class PreviewHighlighter {
   clear() {
     this.cancel();
     this.el.innerHTML = '';
+    this.windowStart = 0;
+    this.text = '';
+    this.candidates = [];
+    this.onWindowChange?.({ start: 0, end: 0, total: 0 });
+  }
+
+  shiftWindow(direction) {
+    const step = Math.max(1, PREVIEW_CHAR_LIMIT - 2000);
+    const maxStart = Math.max(0, this.text.length - PREVIEW_CHAR_LIMIT);
+    const start = Math.max(0, Math.min(maxStart, this.windowStart + direction * step));
+    this.renderNow(this.text, this.candidates, { start });
   }
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
-import { parsePdf, buildPdfResult } from '../src/parsers/pdf.js';
+import { parsePdf, buildPdfResult, sliceGeometry } from '../src/parsers/pdf.js';
 import { parseDocument, buildResult, restoreDocument } from '../src/core/analyzer.js';
 
 async function makeTextPdf(text = 'Contact test@example.com') {
@@ -12,6 +12,18 @@ async function makeTextPdf(text = 'Contact test@example.com') {
 }
 
 describe('PDF 처리', () => {
+  it('부분 문자열 가림은 글자별 실제 폭 정보를 우선 사용한다', () => {
+    const seg = {
+      str: 'Wi한글', width: 40,
+      charOffsets: [0, 15, 20, 30, 40],
+    };
+    expect(sliceGeometry(seg, 1, 3)).toEqual({ offset: 15, width: 15 });
+  });
+
+  it('글자 폭 정보가 없으면 전체 폭 비례값으로 폴백한다', () => {
+    const seg = { str: 'abcd', width: 40, charOffsets: null };
+    expect(sliceGeometry(seg, 1, 3)).toEqual({ offset: 10, width: 20 });
+  });
   it('텍스트 레이어와 페이지 정보를 추출한다', async () => {
     const parsed = await parsePdf(await makeTextPdf(), { render: false });
 

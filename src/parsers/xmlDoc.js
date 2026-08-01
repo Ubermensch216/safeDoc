@@ -2,7 +2,10 @@
 // ZIP 내 XML의 텍스트 노드만 직접 수정하여 서식·구조를 보존한다.
 
 import { strFromU8, strToU8 } from 'fflate';
-import { safeUnzip, rezip, extractSegments, joinSegments, applyToSegments, spliceXml } from './zipUtils.js';
+import {
+  safeUnzip, rezip, extractSegments, extractXlsxSegments,
+  joinSegments, applyToSegments, spliceXml,
+} from './zipUtils.js';
 import { AppError } from '../core/errors.js';
 
 // 형식별 구성
@@ -74,7 +77,9 @@ export function parseZipDocument(buffer, format) {
   const files = [];
   for (const path of targets.sort()) {
     const xml = strFromU8(entries[path]);
-    const segments = extractSegments(xml, config.segmentSpec);
+    const segments = format === 'xlsx' && /^xl\/worksheets\/sheet\d+\.xml$/.test(path)
+      ? extractXlsxSegments(xml)
+      : extractSegments(xml, config.segmentSpec);
     if (segments.length > 0) segments[0].fileBoundary = true;
     files.push({ path, xml, segments });
   }
@@ -106,7 +111,10 @@ export function buildZipResult(parsed, applied) {
     newEntries[file.path] = strToU8(newXml);
   }
   try {
-    const zipped = rezip(newEntries);
+    const zipOptions = parsed.format === 'hwpx'
+      ? { store: ['mimetype'], first: ['mimetype'] }
+      : {};
+    const zipped = rezip(newEntries, zipOptions);
     return new Blob([zipped], { type: parsed.mime });
   } catch {
     throw new AppError('E008');
@@ -143,6 +151,9 @@ export function restoreZipDocument(parsed, mappingTable) {
   for (const file of parsed.files) {
     newEntries[file.path] = strToU8(spliceXml(file.xml, file.segments));
   }
-  const blob = new Blob([rezip(newEntries)], { type: parsed.mime });
+  const zipOptions = parsed.format === 'hwpx'
+    ? { store: ['mimetype'], first: ['mimetype'] }
+    : {};
+  const blob = new Blob([rezip(newEntries, zipOptions)], { type: parsed.mime });
   return { blob, restoredCount, notRestoredCount };
 }

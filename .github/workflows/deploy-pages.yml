@@ -33,6 +33,12 @@ jobs:
       - name: 패키지 설치
         run: npm ci
 
+      - name: 단위시험
+        run: npm test
+
+      - name: 의존성 보안 감사
+        run: npm audit --audit-level=high
+
       - name: safeDoc 빌드
         run: npm run build
 

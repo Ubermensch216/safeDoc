@@ -21,6 +21,18 @@ function makeXlsx() {
   }).buffer;
 }
 
+function makeXlsxWithNumericPii() {
+  const workbook = `<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets><sheet name="숫자셀" sheetId="1"/></sheets></workbook>`;
+  const sharedStrings = `<?xml version="1.0"?><sst count="1" uniqueCount="1"><si><t>주민등록번호</t></si></sst>`;
+  const sheet = `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row><row r="2"><c r="A2"><v>9002011234560</v></c></row></sheetData></worksheet>`;
+  return zipSync({
+    '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types/>'),
+    'xl/workbook.xml': strToU8(workbook),
+    'xl/sharedStrings.xml': strToU8(sharedStrings),
+    'xl/worksheets/sheet1.xml': strToU8(sheet),
+  }).buffer;
+}
+
 function makeDocx() {
   // "홍길동" 이 두 개의 텍스트 런으로 분리된 경우 (기술명세서 Ⅳ-5: 결합 분석)
   const document = `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
@@ -100,6 +112,24 @@ describe('XLSX 처리 (기술명세서 Ⅳ-4)', () => {
       });
     });
   });
+
+  it('숫자 셀의 식별번호를 탐지하고 인라인 문자열로 안전하게 치환한다', async () => {
+    const parsed = parseZipDocument(makeXlsxWithNumericPii(), 'xlsx');
+    expect(parsed.text).toContain('9002011234560');
+    // 공유 문자열 셀의 <v>0</v>는 인덱스이므로 분석 텍스트에 별도 숫자 셀로 추가되지 않는다.
+    expect(parsed.text.split('\n').filter((v) => v === '0')).toHaveLength(0);
+
+    const { applied } = deidentify(parsed);
+    expect(applied.some((c) => c.originalText === '9002011234560')).toBe(true);
+
+    const blob = buildZipResult(parsed, applied);
+    const out = unzipSync(new Uint8Array(await blob.arrayBuffer()));
+    const sheet = strFromU8(out['xl/worksheets/sheet1.xml']);
+    expect(sheet).not.toContain('9002011234560');
+    expect(sheet).toContain('t="inlineStr"');
+    expect(sheet).toContain('<is><t>[주민번호_');
+    expect(sheet).toContain('<c r="A1" t="s"><v>0</v></c>');
+  });
 });
 
 // ---------- DOCX ----------
@@ -152,6 +182,18 @@ describe('HWPX 처리 (기술명세서 Ⅳ-6)', () => {
       expect(strFromU8(out.mimetype)).toBe('application/hwp+zip');
     });
   });
+
+  it('mimetype 항목을 첫 항목이자 무압축(STORE)으로 저장한다', async () => {
+    const parsed = parseZipDocument(makeHwpx(), 'hwpx');
+    const { applied } = deidentify(parsed);
+    const bytes = new Uint8Array(await buildZipResult(parsed, applied).arrayBuffer());
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    expect(view.getUint32(0, true)).toBe(0x04034b50);
+    expect(view.getUint16(8, true)).toBe(0); // compression method: STORE
+    const nameLength = view.getUint16(26, true);
+    const name = new TextDecoder().decode(bytes.slice(30, 30 + nameLength));
+    expect(name).toBe('mimetype');
+  });
 });
 
 // ---------- 보안 ----------
@@ -171,5 +213,20 @@ describe('ZIP 보안 검증 (NFR-007)', () => {
   it('필수 구조가 없는 ZIP은 구조 오류로 거부한다', () => {
     const fake = zipSync({ 'hello.txt': strToU8('내용') }).buffer;
     expect(() => parseZipDocument(fake, 'xlsx')).toThrow(/E009/);
+  });
+
+  it('중앙 디렉터리의 선언 크기가 한도를 넘으면 압축 해제 전에 거부한다', () => {
+    const bytes = zipSync({
+      'xl/workbook.xml': strToU8('<workbook/>'),
+      'xl/worksheets/sheet1.xml': strToU8('<worksheet><t>내용</t></worksheet>'),
+    });
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let central = -1;
+    for (let i = 0; i <= bytes.length - 4; i++) {
+      if (view.getUint32(i, true) === 0x02014b50) { central = i; break; }
+    }
+    expect(central).toBeGreaterThan(0);
+    view.setUint32(central + 24, 301 * 1024 * 1024, true);
+    expect(() => parseZipDocument(bytes.buffer, 'xlsx')).toThrow(/압축해제 크기/);
   });
 });

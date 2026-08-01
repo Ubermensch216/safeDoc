@@ -12,7 +12,8 @@ import { buildMappingTable, mappingTableToBlob, parseMappingTable } from './core
 import { buildSummary, summaryToBlob } from './core/summary.js';
 import { AppError } from './core/errors.js';
 import { checkAvailability, DEFAULT_ENDPOINT, DEFAULT_MODEL } from './ai/ollamaClient.js';
-import { runAiDetection, estimateChunks, DEFAULT_MAX_CHUNKS } from './ai/aiDetect.js';
+import { runAiDetection, createAiStats, estimateChunks, DEFAULT_MAX_CHUNKS } from './ai/aiDetect.js';
+import { AiRunLifecycle } from './ai/lifecycle.js';
 import { $, $$, toast, showScreen, textOffsetIn, escapeHtml } from './ui/dom.js';
 import { CandidateListView } from './ui/candidateList.js';
 import { PreviewHighlighter, buildPreviewHtml } from './ui/highlight.js';
@@ -28,7 +29,7 @@ let highlighter = null;
 let activeFilter = { type: null, source: null };
 
 // AI 상태
-let aiController = null;     // 실행 중인 AI 패스의 취소 신호
+const aiLifecycle = new AiRunLifecycle(); // 이전 문서의 비동기 실행을 현재 세션과 격리
 let aiStats = null;          // 감사 기록용 통계
 let aiAvailability = { available: false, reason: 'unknown' };
 
@@ -44,7 +45,7 @@ function init() {
   document.title = PROGRAM_NAME;
 
   listView = new CandidateListView($('#candidate-list'));
-  highlighter = new PreviewHighlighter($('#preview'));
+  highlighter = new PreviewHighlighter($('#preview'), { onWindowChange: updatePreviewWindowUi });
 
   loadPolicies();
   loadAiSettings();
@@ -271,6 +272,20 @@ function syncReview({ resort = false } = {}) {
   }
 }
 
+function updatePreviewWindowUi({ start, end, total }) {
+  const paged = total > 200000;
+  const info = $('#preview-window-info');
+  const prev = $('#btn-preview-prev');
+  const next = $('#btn-preview-next');
+  info.hidden = !paged;
+  prev.hidden = !paged;
+  next.hidden = !paged;
+  if (!paged) return;
+  info.textContent = `${(start + 1).toLocaleString()}~${end.toLocaleString()} / ${total.toLocaleString()}자`;
+  prev.disabled = start === 0;
+  next.disabled = end >= total;
+}
+
 function pushHistory() {
   // 되돌리기용 스냅샷 (FR-409) — 메모리에서만 유지
   // 후보 배열뿐 아니라 수동 추가 카운터까지 담아야 요약 통계가 어긋나지 않는다
@@ -292,6 +307,9 @@ function markUserModified(c) {
 }
 
 function bindReviewEvents() {
+  $('#btn-preview-prev').addEventListener('click', () => highlighter.shiftWindow(-1));
+  $('#btn-preview-next').addEventListener('click', () => highlighter.shiftWindow(1));
+
   // 미리보기에서 후보 클릭 → 목록에서 해당 항목으로 이동
   $('#preview').addEventListener('click', (e) => {
     const mark = e.target.closest('mark.pii');
@@ -456,6 +474,8 @@ function bindReviewEvents() {
     if (start < 0 || end < 0) return;
     if (start > end) [start, end] = [end, start];
     if (start === end) return;
+    start += highlighter.windowStart;
+    end += highlighter.windowStart;
 
     pushHistory();
     const ok = addManualCandidate(start, end, $('#add-type').value);
@@ -586,51 +606,77 @@ function addCandidatesByText(term, type, method) {
 
 // ---------- AI 탐지 패스 (계획 C-7) ----------
 
-function stopAiPass() {
-  if (aiController) {
-    aiController.abort();
-    aiController = null;
-  }
+async function stopAiPass({ wait = false } = {}) {
+  const stopped = aiLifecycle.stop({ wait });
   $('#ai-status').hidden = true;
+  return wait ? await stopped : null;
 }
 
-async function startAiPass() {
-  if (!aiSettings.enabled) return;
+function startAiPass() {
+  if (!aiSettings.enabled) return Promise.resolve(null);
+  const parsed = session.parsed;
+  const candidates = session.candidates;
+  if (!parsed) return Promise.resolve(null);
+
+  const run = aiLifecycle.begin();
+  const initialStats = createAiStats(parsed.text, {
+    model: aiSettings.model,
+    maxChunks: DEFAULT_MAX_CHUNKS,
+  });
+  const promise = performAiPass(run, parsed, candidates, initialStats);
+  return aiLifecycle.attachPromise(run, promise);
+}
+
+async function performAiPass(run, parsed, candidates, initialStats) {
   await refreshAiAvailability();
+  if (!aiLifecycle.isCurrent(run)) {
+    initialStats.stopReason = 'aborted';
+    return initialStats;
+  }
   if (!aiAvailability.available) {
     if (aiAvailability.reason && aiAvailability.reason !== 'disabled') {
       toast(`${aiAvailability.message || 'AI 탐지를 사용할 수 없습니다.'} 규칙 기반 결과만 표시합니다.`);
     }
-    return;
+    aiLifecycle.clear(run);
+    return null;
   }
 
-  const chunkCount = estimateChunks(session.parsed.text);
+  const chunkCount = estimateChunks(parsed.text);
   if (chunkCount > DEFAULT_MAX_CHUNKS) {
     const minutes = Math.ceil((chunkCount * 6) / 60);
     const ok = window.confirm(
       `문서가 커서 AI 탐지에 약 ${minutes}분 이상 걸립니다 (${chunkCount}개 구간).\n`
       + `앞쪽 ${DEFAULT_MAX_CHUNKS}개 구간만 검사합니다.\n\n계속하시겠습니까?`,
     );
-    if (!ok) return;
+    if (!ok) {
+      aiLifecycle.clear(run);
+      return null;
+    }
   }
 
-  aiController = new AbortController();
+  const controller = new AbortController();
+  aiLifecycle.attachController(run, controller);
+  if (!aiLifecycle.isCurrent(run)) {
+    initialStats.stopReason = 'aborted';
+    return initialStats;
+  }
   const statusBox = $('#ai-status');
   statusBox.hidden = false;
   setAiBadge('busy', 'AI 탐지 중…');
   updateAiProgress(0, Math.min(chunkCount, DEFAULT_MAX_CHUNKS), 0);
 
   try {
-    aiStats = await runAiDetection(session.parsed, session.candidates, {
+    const completedStats = await runAiDetection(parsed, candidates, {
       endpoint: aiSettings.endpoint,
       model: aiSettings.model,
-      signal: aiController.signal,
+      signal: controller.signal,
       onChunkMerged: ({ index, total, added, stats }) => {
+        if (!aiLifecycle.isCurrent(run) || session.parsed !== parsed) return;
         updateAiProgress(index + 1, total, stats.addedCount);
         // 새 후보가 도착했으므로 목록·미리보기를 갱신한다.
         // sync는 기존 카드를 재사용하므로 스크롤·펼침 상태가 유지된다.
         syncReview();
-        highlighter.schedule(session.parsed.text, session.candidates);
+        highlighter.schedule(parsed.text, candidates);
 
         // 검토를 마쳤다고 체크한 뒤에 새 후보가 나타나면 확인을 다시 받는다
         if (added.length > 0 && $('#final-confirm').checked) {
@@ -640,17 +686,22 @@ async function startAiPass() {
         }
       },
     });
+    if (aiLifecycle.isCurrent(run) && session.parsed === parsed) aiStats = completedStats;
+    return completedStats;
   } catch (err) {
-    showError(err);
+    if (aiLifecycle.isCurrent(run)) showError(err);
+    return initialStats;
   } finally {
-    aiController = null;
-    statusBox.hidden = true;
-    highlighter.renderNow(session.parsed.text, session.candidates);
-    // AI 결과가 붙으면서 각 후보의 검토 우선순위가 바뀌었으므로 여기서 한 번 재정렬한다.
-    // 청크마다 재정렬하면 검토 중인 사용자 눈앞에서 카드가 계속 움직인다.
-    // AI 완료는 사용자에게 알리는 discrete 시점이므로 여기가 유일하게 안전한 자리다.
-    syncReview({ resort: true });
-    finishAiPass();
+    if (aiLifecycle.isCurrent(run) && session.parsed === parsed) {
+      statusBox.hidden = true;
+      highlighter.renderNow(parsed.text, candidates);
+      // AI 결과가 붙으면서 각 후보의 검토 우선순위가 바뀌었으므로 여기서 한 번 재정렬한다.
+      // 청크마다 재정렬하면 검토 중인 사용자 눈앞에서 카드가 계속 움직인다.
+      // AI 완료는 사용자에게 알리는 discrete 시점이므로 여기가 유일하게 안전한 자리다.
+      syncReview({ resort: true });
+      finishAiPass();
+      aiLifecycle.clear(run);
+    }
   }
 }
 
@@ -682,7 +733,8 @@ async function executeDeidentify() {
   executeButton.disabled = true;
   try {
     // AI가 아직 돌고 있으면 멈춘 상태로 결과를 만든다 (미완료 사실은 요약에 기록된다)
-    stopAiPass();
+    const stoppedStats = await stopAiPass({ wait: true });
+    if (stoppedStats) aiStats = stoppedStats;
 
     const { text: afterText, applied } = applyToText(session.parsed.text, session.candidates, session);
     const resultName = resultFileName(session.file.name);

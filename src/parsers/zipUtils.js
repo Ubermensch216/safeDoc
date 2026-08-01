@@ -6,6 +6,59 @@ import { AppError } from '../core/errors.js';
 // ZIP 폭탄 방지 한도 (NFR-007)
 const MAX_ZIP_ENTRIES = 10000;
 const MAX_TOTAL_UNCOMPRESSED = 300 * 1024 * 1024; // 300MB
+const MAX_COMPRESSION_RATIO = 2000;
+
+const SIG_EOCD = 0x06054b50;
+const SIG_CENTRAL = 0x02014b50;
+
+// 중앙 디렉터리는 압축을 풀지 않고 읽을 수 있다. 여기서 선언 크기와 항목 수를
+// 먼저 검사해 unzipSync가 거대한 버퍼를 만들기 전에 비정상 ZIP을 거부한다.
+export function inspectZipCentralDirectory(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const minEocd = 22;
+  const searchStart = Math.max(0, bytes.length - 0xffff - minEocd);
+  let eocd = -1;
+  for (let i = bytes.length - minEocd; i >= searchStart; i--) {
+    if (view.getUint32(i, true) === SIG_EOCD) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new AppError('E005');
+
+  const diskNo = view.getUint16(eocd + 4, true);
+  const centralDisk = view.getUint16(eocd + 6, true);
+  const entryCount = view.getUint16(eocd + 10, true);
+  const centralSize = view.getUint32(eocd + 12, true);
+  const centralOffset = view.getUint32(eocd + 16, true);
+  if (diskNo !== 0 || centralDisk !== 0) throw new AppError('E005', '분할 ZIP 문서는 지원하지 않습니다.');
+  if (entryCount === 0xffff || centralSize === 0xffffffff || centralOffset === 0xffffffff) {
+    throw new AppError('E005', 'ZIP64 문서는 지원 한도를 초과합니다.');
+  }
+  if (entryCount > MAX_ZIP_ENTRIES) throw new AppError('E005', '압축 항목 수가 비정상적으로 많습니다.');
+  if (centralOffset + centralSize > bytes.length) throw new AppError('E005');
+
+  let pos = centralOffset;
+  let totalUncompressed = 0;
+  let encrypted = false;
+  for (let i = 0; i < entryCount; i++) {
+    if (pos + 46 > bytes.length || view.getUint32(pos, true) !== SIG_CENTRAL) throw new AppError('E005');
+    const flags = view.getUint16(pos + 8, true);
+    const compressed = view.getUint32(pos + 20, true);
+    const uncompressed = view.getUint32(pos + 24, true);
+    const nameLength = view.getUint16(pos + 28, true);
+    const extraLength = view.getUint16(pos + 30, true);
+    const commentLength = view.getUint16(pos + 32, true);
+    encrypted ||= (flags & 1) !== 0;
+    totalUncompressed += uncompressed;
+    if (totalUncompressed > MAX_TOTAL_UNCOMPRESSED) {
+      throw new AppError('E005', '압축해제 크기가 비정상적으로 큽니다.');
+    }
+    if (uncompressed > 1024 * 1024 && uncompressed / Math.max(compressed, 1) > MAX_COMPRESSION_RATIO) {
+      throw new AppError('E005', '압축률이 비정상적으로 높습니다.');
+    }
+    pos += 46 + nameLength + extraLength + commentLength;
+  }
+  if (pos > centralOffset + centralSize) throw new AppError('E005');
+  return { entryCount, totalUncompressed, encrypted };
+}
 
 // 암호화된 Office 문서는 OLE(CFB) 컨테이너로 저장됨 → ZIP이 아님
 function isOleContainer(bytes) {
@@ -22,6 +75,9 @@ export function safeUnzip(buffer) {
   if (!(bytes[0] === 0x50 && bytes[1] === 0x4b)) {
     throw new AppError('E005');
   }
+
+  const zipInfo = inspectZipCentralDirectory(bytes);
+  if (zipInfo.encrypted) throw new AppError('E004');
 
   let entries;
   try {
@@ -42,8 +98,16 @@ export function safeUnzip(buffer) {
   return entries;
 }
 
-export function rezip(entries) {
-  return zipSync(entries);
+export function rezip(entries, { store = [], first = [] } = {}) {
+  const ordered = {};
+  const storeSet = new Set(store);
+  const add = (name) => {
+    if (!(name in entries) || name in ordered) return;
+    ordered[name] = storeSet.has(name) ? [entries[name], { level: 0 }] : entries[name];
+  };
+  for (const name of first) add(name);
+  for (const name of Object.keys(entries)) add(name);
+  return zipSync(ordered);
 }
 
 // XML 엔터티 처리
@@ -90,6 +154,45 @@ export function extractSegments(xml, { openTag, closeTag, paragraphClose }) {
     });
     prevRawEnd = rawEnd;
   }
+  return segments;
+}
+
+// XLSX 워크시트의 숫자 셀은 <t>가 아니라 <v>에 저장된다.
+// 공유 문자열 셀(t="s")의 <v>는 개인정보가 아니라 sharedStrings 인덱스이므로 제외한다.
+export function extractXlsxSegments(xml) {
+  const segments = extractSegments(xml, {
+    openTag: '<t(?:\\s[^>]*)?>', closeTag: '</t>', paragraphClose: null,
+  });
+
+  const cellRe = /<c\b([^>]*)>([\s\S]*?)<\/c>/g;
+  for (const cell of xml.matchAll(cellRe)) {
+    const attrs = cell[1];
+    const type = /\bt="([^"]+)"/.exec(attrs)?.[1] || 'n';
+    if (!['n'].includes(type)) continue;
+
+    const body = cell[2];
+    const value = /<v>([\s\S]*?)<\/v>/.exec(body);
+    if (!value || !/^[+\-]?\d+(?:\.\d+)?$/.test(value[1].trim())) continue;
+
+    const cellStart = cell.index;
+    const cellEnd = cell.index + cell[0].length;
+    const bodyStart = cell.index + cell[0].indexOf(body);
+    const rawStart = bodyStart + value.index + '<v>'.length;
+    const rawEnd = rawStart + value[1].length;
+    segments.push({
+      rawStart,
+      rawEnd,
+      text: value[1],
+      newParagraph: true,
+      xlsxNumeric: true,
+      cellStart,
+      cellEnd,
+      cellOpen: `<c${attrs}>`,
+    });
+  }
+
+  segments.sort((a, b) => a.rawStart - b.rawStart);
+  segments.forEach((seg, i) => { seg.newParagraph = i > 0; });
   return segments;
 }
 
@@ -143,7 +246,15 @@ export function spliceXml(xml, segments) {
   for (let i = segments.length - 1; i >= 0; i--) {
     const seg = segments[i];
     if (seg.newText === undefined || seg.newText === seg.text) continue;
-    result = result.slice(0, seg.rawStart) + encodeXmlEntities(seg.newText) + result.slice(seg.rawEnd);
+    if (seg.xlsxNumeric) {
+      const open = seg.cellOpen
+        .replace(/\s+t="[^"]*"/g, '')
+        .replace(/>$/, ' t="inlineStr">');
+      const cellXml = `${open}<is><t>${encodeXmlEntities(seg.newText)}</t></is></c>`;
+      result = result.slice(0, seg.cellStart) + cellXml + result.slice(seg.cellEnd);
+    } else {
+      result = result.slice(0, seg.rawStart) + encodeXmlEntities(seg.newText) + result.slice(seg.rawEnd);
+    }
   }
   return result;
 }

@@ -16,6 +16,34 @@ export const DEFAULT_MAX_CHUNKS = 200;
 // 검증 호출에 실을 후보 수 상한 (출력 토큰이 곧 지연이다)
 const MAX_VERIFY_VALUES = 30;
 
+// AI 실행 전·중단 시에도 동일한 감사 형식을 만들 수 있도록 초기 통계를 공개한다.
+// UI가 가용성 확인 단계에서 중단되더라도 "AI 미사용"으로 잘못 기록하지 않는다.
+export function createAiStats(text, {
+  model = DEFAULT_MODEL,
+  maxChunks = DEFAULT_MAX_CHUNKS,
+} = {}) {
+  const chunkCount = chunkText(text).length;
+  return {
+    enabled: true,
+    model,
+    promptVersion: PROMPT_VERSION,
+    temperature: 0,
+    chunkCount,
+    chunksPlanned: Math.min(chunkCount, maxChunks),
+    chunksCompleted: 0,
+    addedCount: 0,
+    confirmedCount: 0,
+    disputedCount: 0,
+    rejectedHallucinations: 0,
+    failedChunks: 0,
+    failedVerifications: 0,
+    truncated: chunkCount > maxChunks,
+    elapsedMs: 0,
+    completed: false,
+    stopReason: null,
+  };
+}
+
 // 오탐 검증 대상 고르기.
 // 체크섬으로 검증된 정형정보는 LLM보다 신뢰도가 높으므로 묻지 않는다.
 // 사용자가 직접 추가·수정한 것도 묻지 않는다 — 사람의 판단이 우선이다.
@@ -50,26 +78,7 @@ export async function runAiDetection(parsed, candidates, {
 
   const allChunks = chunkText(parsed.text);
   const chunks = allChunks.slice(0, maxChunks);
-
-  const stats = {
-    enabled: true,
-    model,
-    promptVersion: PROMPT_VERSION,
-    temperature: 0,
-    chunkCount: allChunks.length,
-    chunksPlanned: chunks.length,
-    chunksCompleted: 0,
-    addedCount: 0,
-    confirmedCount: 0,
-    disputedCount: 0,
-    rejectedHallucinations: 0,
-    failedChunks: 0,
-    failedVerifications: 0,
-    truncated: allChunks.length > chunks.length,
-    elapsedMs: 0,
-    completed: false,
-    stopReason: null, // 'aborted' | 'offline' | null
-  };
+  const stats = createAiStats(parsed.text, { model, maxChunks });
 
   for (let i = 0; i < chunks.length; i++) {
     if (signal?.aborted) {
