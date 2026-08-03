@@ -3,7 +3,7 @@
 import './style.css';
 import { PROGRAM_NAME, PROGRAM_VERSION } from './version.js';
 import { RULE_VERSION } from './detect/engine.js';
-import { PII_TYPES, ACTION_LABELS } from './detect/types.js';
+import { PII_TYPES, ACTION_LABELS, CONFIDENCE_LEVELS } from './detect/types.js';
 import { WorkSession } from './core/session.js';
 import { validateAndRead, downloadBlob, resultFileName } from './core/fileManager.js';
 import { parseDocument, analyze, buildResult, restoreDocument } from './core/analyzer.js';
@@ -141,13 +141,33 @@ async function refreshAiAvailability() {
 
 // ---------- 탭 전환 ----------
 
+// WAI-ARIA 탭 패턴: 선택 상태를 aria-selected로 알리고,
+// 탭 사이 이동은 Tab 키가 아니라 좌우 방향키로 한다(로빙 tabindex).
+function activateTab(btn, { focus = false } = {}) {
+  $$('.tab-btn').forEach((b) => {
+    const on = b === btn;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', String(on));
+    b.tabIndex = on ? 0 : -1;
+  });
+  $$('.tab-panel').forEach((p) => p.classList.remove('active'));
+  $(`#tab-${btn.dataset.tab}`).classList.add('active');
+  if (focus) btn.focus();
+}
+
 function bindTabEvents() {
-  $$('.tab-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      $$('.tab-btn').forEach((b) => b.classList.remove('active'));
-      $$('.tab-panel').forEach((p) => p.classList.remove('active'));
-      btn.classList.add('active');
-      $(`#tab-${btn.dataset.tab}`).classList.add('active');
+  const btns = $$('.tab-btn');
+  btns.forEach((btn, i) => {
+    btn.addEventListener('click', () => activateTab(btn));
+    btn.addEventListener('keydown', (e) => {
+      const map = { ArrowRight: 1, ArrowLeft: -1, Home: 'first', End: 'last' };
+      const move = map[e.key];
+      if (move === undefined) return;
+      e.preventDefault();
+      const next = move === 'first' ? 0
+        : move === 'last' ? btns.length - 1
+          : (i + move + btns.length) % btns.length;
+      activateTab(btns[next], { focus: true });
     });
   });
 }
@@ -212,7 +232,17 @@ async function handleFile(file) {
 
 function setProgress(percent, statusText) {
   $('#analyze-progress').style.width = `${percent}%`;
+  $('#analyze-progressbar').setAttribute('aria-valuenow', String(Math.round(percent)));
   $('#analyze-status').textContent = statusText;
+}
+
+// 보조기술 전용 알림. 토스트와 달리 화면에는 나타나지 않는다.
+function announce(message) {
+  const region = $('#live-region');
+  if (!region) return;
+  region.textContent = '';
+  // 같은 문구가 연속으로 오면 읽지 않는 판독기가 있어 한 틱 비운 뒤 넣는다
+  setTimeout(() => { region.textContent = message; }, 50);
 }
 
 // 분석 실행 — 단계 사이에 제어권을 양보하여 화면 멈춤 방지 (NFR-104)
@@ -260,7 +290,11 @@ function syncReview({ resort = false } = {}) {
 
   const total = session.candidates.length;
   const selected = session.candidates.filter((c) => c.selected).length;
-  $('#detect-count-badge').textContent = `${total}건 중 ${selected}건 처리`;
+  // 제목 줄이 길면 검색 상자가 다음 줄로 밀려 목록이 그만큼 짧아진다.
+  // 화면에는 숫자만, 읽어 주는 문장은 aria-label에 둔다.
+  const badge = $('#detect-count-badge');
+  badge.textContent = `${selected}/${total}`;
+  badge.setAttribute('aria-label', `총 ${total}건 중 ${selected}건 처리 대상`);
 
   const filtered = activeFilter.type || activeFilter.source;
   $('#filter-actions').hidden = !filtered;
@@ -270,6 +304,31 @@ function syncReview({ resort = false } = {}) {
       : (activeFilter.source === 'ai' ? 'AI 발견' : 'AI 오탐 의심');
     $('#filter-label').textContent = `${label} ${visible}건`;
   }
+
+  updateReviewGap();
+}
+
+// 판단이 갈리는 항목을 손대지 않은 채 실행하면, 확인 체크박스 하나로 전부 통과한다.
+// 무엇이 남아 있는지 실행 직전에 눈에 보이게 한다.
+function reviewGaps() {
+  const disputed = session.candidates.filter((c) => c.aiDisputed && !c.userModified);
+  const lowConf = session.candidates.filter(
+    (c) => c.confidence < CONFIDENCE_LEVELS.MEDIUM && !c.userModified,
+  );
+  return { disputed, lowConf };
+}
+
+function updateReviewGap() {
+  const box = $('#review-gap');
+  const { disputed, lowConf } = reviewGaps();
+  const parts = [];
+  if (disputed.length > 0) parts.push(`<strong>AI 오탐 의심 ${disputed.length}건</strong>`);
+  if (lowConf.length > 0) parts.push(`<strong>신뢰도 낮음 ${lowConf.length}건</strong>`);
+
+  if (parts.length === 0) { box.hidden = true; return; }
+  box.hidden = false;
+  box.innerHTML = `${parts.join(' · ')}이 아직 확인되지 않았습니다. `
+    + '위 필터로 해당 항목만 모아 볼 수 있습니다. 확인 후 실행하십시오.';
 }
 
 function updatePreviewWindowUi({ start, end, total }) {
@@ -311,11 +370,23 @@ function bindReviewEvents() {
   $('#btn-preview-next').addEventListener('click', () => highlighter.shiftWindow(1));
 
   // 미리보기에서 후보 클릭 → 목록에서 해당 항목으로 이동
-  $('#preview').addEventListener('click', (e) => {
-    const mark = e.target.closest('mark.pii');
-    if (!mark) return;
+  const jumpToCandidate = (mark) => {
     highlighter.focus(mark.dataset.id);
     listView.setCursor(mark.dataset.id, session.candidates);
+  };
+
+  $('#preview').addEventListener('click', (e) => {
+    const mark = e.target.closest('mark.pii');
+    if (mark) jumpToCandidate(mark);
+  });
+
+  // 강조는 role="button"이므로 Enter·Space로도 동작해야 한다
+  $('#preview').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const mark = e.target.closest?.('mark.pii');
+    if (!mark) return;
+    e.preventDefault();
+    jumpToCandidate(mark);
   });
 
   const list = $('#candidate-list');
@@ -526,6 +597,14 @@ function bindKeyboard() {
 
     const key = e.key.toLowerCase();
 
+    // 미리보기에 포커스가 있으면 방향키는 그 패널의 스크롤이어야 한다.
+    // 여기서 가로채면 키보드만 쓰는 사용자는 문서를 읽을 수 없다.
+    if (document.activeElement === $('#preview')
+        && (key === 'arrowdown' || key === 'arrowup' || key === 'pageup' || key === 'pagedown'
+            || key === 'home' || key === 'end' || key === ' ')) {
+      return;
+    }
+
     if (key === 'j' || key === 'arrowdown') {
       e.preventDefault();
       const id = listView.moveCursor(1, session.candidates);
@@ -712,16 +791,21 @@ function finishAiPass() {
     if (aiStats.addedCount > 0) {
       toast(`AI가 규칙이 놓친 개인정보 ${aiStats.addedCount}건을 추가로 찾았습니다.`);
     }
+    announce(`AI 탐지 완료. ${aiStats.addedCount}건을 추가로 찾았습니다. 후보 총 ${session.candidates.length}건.`);
   } else if (aiStats.stopReason === 'aborted') {
     setAiBadge('off', 'AI 중단됨');
+    announce('AI 탐지를 중단했습니다.');
   } else {
     setAiBadge('off', 'AI 미완료');
     toast('AI 탐지가 끝까지 완료되지 않았습니다. 결과에 기록됩니다.', true);
+    announce('AI 탐지가 완료되지 않았습니다.');
   }
 }
 
 function updateAiProgress(done, total, added) {
-  $('#ai-progress').style.width = `${total > 0 ? (done / total) * 100 : 0}%`;
+  const pct = total > 0 ? (done / total) * 100 : 0;
+  $('#ai-progress').style.width = `${pct}%`;
+  $('#ai-progressbar').setAttribute('aria-valuenow', String(Math.round(pct)));
   $('#ai-status-text').textContent = `AI 검사 ${done}/${total} · ${added}건 추가 발견`;
 }
 

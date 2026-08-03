@@ -51,7 +51,9 @@ export function buildPreviewHtml(text, candidates, {
     if (relativeStart < pos) continue; // 중첩 방어 (병합 단계에서 정리되지만 한 번 더 확인)
     html += escapeHtml(view.slice(pos, relativeStart));
     const end = Math.min(c.end - safeStart, view.length);
-    html += `<mark class="${markClass(c)}" data-id="${c.id}" title="${escapeHtml(markTitle(c))}">`
+    // 강조는 클릭하면 해당 후보로 이동하는 조작 요소다. 키보드로도 닿아야 한다.
+    html += `<mark class="${markClass(c)}" data-id="${c.id}" title="${escapeHtml(markTitle(c))}"`
+      + ` role="button" tabindex="0" aria-label="${escapeHtml(`${view.slice(relativeStart, end)} — ${markTitle(c)}`)}">`
       + `${escapeHtml(view.slice(relativeStart, end))}</mark>`;
     pos = end;
   }

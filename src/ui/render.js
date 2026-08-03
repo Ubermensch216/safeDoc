@@ -33,9 +33,13 @@ export function renderTypeChips(candidates, active) {
     if (c.aiDisputed) disputedCount += 1;
   }
 
+  // 필터가 없는 상태가 곧 "전체"다. 아무것도 눌리지 않은 것처럼 보이면 안 된다.
+  const noFilter = !active.type && !active.source;
   const chip = (key, label, n, extraClass = '') => {
-    const isActive = active.type === key || active.source === key;
-    return `<button class="chip ${extraClass}${isActive ? ' active' : ''}" data-chip="${key}">`
+    const isActive = key === 'all' ? noFilter : (active.type === key || active.source === key);
+    // 토글 버튼이므로 눌림 상태를 aria-pressed로 알린다 (색만으로는 전달되지 않는다)
+    return `<button class="chip ${extraClass}${isActive ? ' active' : ''}" data-chip="${key}"`
+      + ` aria-pressed="${isActive}" aria-label="${escapeHtml(label)} ${n}건">`
       + `${escapeHtml(label)}<span class="n">${n}</span></button>`;
   };
 

@@ -181,18 +181,24 @@ export class CandidateListView {
       ? `<span class="type-badge" title="AI는 ${escapeHtml(PII_TYPES[c.aiReportedType]?.label || c.aiReportedType)}(으)로 보았으나 규칙 검증으로 교정됨">유형 교정</span>`
       : '';
 
+    const typeLabel = PII_TYPES[c.type]?.label || c.type;
+    // 체크박스·처리방식 선택은 화면 없이도 어떤 항목의 것인지 알 수 있어야 한다
+    const forWhat = `${c.originalText} (${typeLabel})`;
+
     el.innerHTML = `
-<input type="checkbox" class="c-check" ${c.selected ? 'checked' : ''} aria-label="처리 대상 선택" />
+<input type="checkbox" class="c-check" ${c.selected ? 'checked' : ''}
+       aria-label="${escapeHtml(forWhat)} 처리 대상 선택" />
 <div class="cand-main">
   <div class="cand-line">
-    <span class="cand-value">${escapeHtml(c.originalText)}</span>
-    <span class="type-badge">${escapeHtml(PII_TYPES[c.type]?.label || c.type)}</span>
+    <span class="cand-value" title="${escapeHtml(c.originalText)}">${escapeHtml(c.originalText)}</span>
+    <span class="type-badge">${escapeHtml(typeLabel)}</span>
     ${fixedHtml}
   </div>
-  <div class="cand-line">${badgeHtml}${reasonHtml}</div>
+  <div class="cand-line cand-meta">${badgeHtml}${reasonHtml}</div>
 </div>
-<select class="c-action cand-action" aria-label="처리방식">${optionsHtml(ACTION_ENTRIES, action)}</select>
-<button class="cand-toggle" aria-expanded="${isOpen}" aria-label="상세">${isOpen ? '▴' : '▾'}</button>
+<select class="c-action cand-action" aria-label="${escapeHtml(forWhat)} 처리방식">${optionsHtml(ACTION_ENTRIES, action)}</select>
+<button class="cand-toggle" aria-expanded="${isOpen}"
+        aria-label="${escapeHtml(forWhat)} 상세 ${isOpen ? '접기' : '펼치기'}">${isOpen ? '▴' : '▾'}</button>
 ${isOpen ? `
 <div class="cand-detail">
   <label class="inline-field">유형

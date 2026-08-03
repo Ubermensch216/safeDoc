@@ -14,17 +14,23 @@
   <title>개인정보 비식별화 프로그램</title>
 </head>
 <body>
+  <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+
   <header class="app-header">
-    <div class="brand">
+    <h1 class="brand">
       <span class="brand-mark" aria-hidden="true">🛡</span>
       <span class="brand-name">safeDoc</span>
+      <span class="sr-only">개인정보 비식별화 프로그램</span>
       <span class="brand-version" id="version-info"></span>
-    </div>
+    </h1>
 
-    <nav class="tabs" role="tablist">
-      <button class="tab-btn active" data-tab="deidentify" role="tab">비식별 처리</button>
-      <button class="tab-btn" data-tab="restore" role="tab">원본 복원</button>
-      <button class="tab-btn" data-tab="settings" role="tab">설정</button>
+    <nav class="tabs" role="tablist" aria-label="주요 기능">
+      <button class="tab-btn active" data-tab="deidentify" role="tab"
+              id="tabbtn-deidentify" aria-controls="tab-deidentify" aria-selected="true" tabindex="0">비식별 처리</button>
+      <button class="tab-btn" data-tab="restore" role="tab"
+              id="tabbtn-restore" aria-controls="tab-restore" aria-selected="false" tabindex="-1">원본 복원</button>
+      <button class="tab-btn" data-tab="settings" role="tab"
+              id="tabbtn-settings" aria-controls="tab-settings" aria-selected="false" tabindex="-1">설정</button>
     </nav>
 
     <div class="trust-badges">
@@ -37,14 +43,14 @@
     </div>
   </header>
 
-  <main>
+  <main id="main-content">
     <!-- ============ 비식별 처리 탭 ============ -->
-    <section id="tab-deidentify" class="tab-panel active">
+    <section id="tab-deidentify" class="tab-panel active" role="tabpanel" aria-labelledby="tabbtn-deidentify">
 
       <!-- 1단계: 업로드 -->
       <div id="screen-main" class="screen active">
         <ol class="steps" aria-label="진행 단계">
-          <li class="step current">문서 선택</li><li class="step">분석</li><li class="step">검토</li><li class="step">결과</li>
+          <li class="step current" aria-current="step">문서 선택</li><li class="step">분석</li><li class="step">검토</li><li class="step">결과</li>
         </ol>
 
         <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="문서 선택 또는 끌어놓기">
@@ -83,12 +89,13 @@
       <!-- 2단계: 분석 -->
       <div id="screen-analyze" class="screen">
         <ol class="steps" aria-label="진행 단계">
-          <li class="step done">문서 선택</li><li class="step current">분석</li><li class="step">검토</li><li class="step">결과</li>
+          <li class="step done">문서 선택</li><li class="step current" aria-current="step">분석</li><li class="step">검토</li><li class="step">결과</li>
         </ol>
         <div class="panel panel-center">
           <h2>문서를 분석하고 있습니다</h2>
           <div id="analyze-file-info" class="file-info"></div>
-          <div class="progress" role="progressbar" aria-labelledby="analyze-status">
+          <div class="progress" id="analyze-progressbar" role="progressbar" aria-labelledby="analyze-status"
+               aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
             <div id="analyze-progress" class="progress-fill"></div>
           </div>
           <p id="analyze-status" class="status-text">파일을 읽는 중…</p>
@@ -98,14 +105,18 @@
 
       <!-- 3단계: 검토 -->
       <div id="screen-review" class="screen">
-        <ol class="steps" aria-label="진행 단계">
-          <li class="step done">문서 선택</li><li class="step done">분석</li><li class="step current">검토</li><li class="step">결과</li>
-        </ol>
-
+        <!-- 검토 화면은 세로 공간이 곧 검토 효율이다.
+             단계 표시·문서 정보·AI 진행을 한 줄에 모은다. -->
         <div class="review-head">
+          <ol class="steps" aria-label="진행 단계">
+            <li class="step done">문서 선택</li><li class="step done">분석</li><li class="step current" aria-current="step">검토</li><li class="step">결과</li>
+          </ol>
           <div id="doc-meta" class="doc-meta"></div>
           <div id="ai-status" class="ai-status" hidden>
-            <div class="ai-status-bar"><div id="ai-progress" class="ai-status-fill"></div></div>
+            <div class="ai-status-bar" id="ai-progressbar" role="progressbar"
+                 aria-labelledby="ai-status-text" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div id="ai-progress" class="ai-status-fill"></div>
+            </div>
             <span id="ai-status-text" class="ai-status-text"></span>
             <button id="btn-cancel-ai" class="btn tiny ghost">AI 중단</button>
           </div>
@@ -172,6 +183,8 @@
           </section>
         </div>
 
+        <div id="review-gap" class="alert alert-warn compact" hidden></div>
+
         <div class="review-footer">
           <label class="confirm-check">
             <input type="checkbox" id="final-confirm" />
@@ -185,7 +198,7 @@
       <!-- 4단계: 결과 -->
       <div id="screen-result" class="screen">
         <ol class="steps" aria-label="진행 단계">
-          <li class="step done">문서 선택</li><li class="step done">분석</li><li class="step done">검토</li><li class="step current">결과</li>
+          <li class="step done">문서 선택</li><li class="step done">분석</li><li class="step done">검토</li><li class="step current" aria-current="step">결과</li>
         </ol>
 
         <div id="ai-incomplete-warning" class="alert alert-warn" hidden></div>
@@ -218,14 +231,14 @@
         </div>
 
         <div class="result-footer">
-          <button id="btn-new-doc" class="btn primary">새 문서 처리</button>
+          <button id="btn-new-doc" class="btn">새 문서 처리</button>
           <button id="btn-finish" class="btn ghost">작업 종료 (작업정보 초기화)</button>
         </div>
       </div>
     </section>
 
     <!-- ============ 복원 탭 ============ -->
-    <section id="tab-restore" class="tab-panel">
+    <section id="tab-restore" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-restore">
       <div class="panel narrow">
         <h2>원본 복원</h2>
         <p>비식별 처리된 문서와 함께 저장한 <strong>대응표 파일(JSON)</strong>로 치환값을 원문으로 되돌립니다.</p>
@@ -244,7 +257,7 @@
     </section>
 
     <!-- ============ 설정 탭 ============ -->
-    <section id="tab-settings" class="tab-panel">
+    <section id="tab-settings" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-settings">
 
       <div class="panel">
         <h2>AI 탐지</h2>
@@ -298,7 +311,10 @@
     모든 처리는 사용자 PC에서 수행됩니다 · 이 PC 안의 AI 엔진 외 외부 통신 없음
   </footer>
 
-  <div id="toast" class="toast" role="status" hidden></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <!-- AI 결과는 비동기로 도착한다. 화면을 보지 않는 사용자에게도 알린다. -->
+  <div id="live-region" class="sr-only" role="status" aria-live="polite"></div>
 
   <script type="module" src="/src/main.js"></script>
 </body>
