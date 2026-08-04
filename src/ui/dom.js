@@ -66,3 +66,20 @@ export function textOffsetIn(container, targetNode, offsetInNode) {
   }
   return -1;
 }
+
+// HTML 파서는 CRLF(\r\n)를 LF(\n) 한 글자로 정규화한다.
+// 따라서 DOM에서 센 선택 오프셋을 원문에 그대로 더하면 줄마다 1자씩 앞당겨진다.
+// renderedOffset을 sourceStart부터의 원문 UTF-16 오프셋으로 다시 변환한다.
+export function renderedOffsetToSource(text, sourceStart, renderedOffset) {
+  const safeStart = Math.max(0, Math.min(text.length, sourceStart));
+  const target = Math.max(0, renderedOffset);
+  let source = safeStart;
+  let rendered = 0;
+
+  while (source < text.length && rendered < target) {
+    if (text[source] === '\r' && text[source + 1] === '\n') source += 2;
+    else source += 1;
+    rendered += 1;
+  }
+  return source;
+}

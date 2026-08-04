@@ -204,8 +204,8 @@ export class CandidateListView {
   <div class="cand-line cand-meta">${badgeHtml}${reasonHtml}</div>
 </div>
 <div class="cand-decisions" role="group" aria-label="${escapeHtml(forWhat)} 검토 결정">
-  <button class="c-decision process" data-state="${REVIEW_STATES.PROCESS}" aria-pressed="${reviewState === REVIEW_STATES.PROCESS}">처리</button>
-  <button class="c-decision exclude" data-state="${REVIEW_STATES.EXCLUDE}" aria-pressed="${reviewState === REVIEW_STATES.EXCLUDE}">제외</button>
+  <button class="c-decision process" data-state="${REVIEW_STATES.PROCESS}" aria-pressed="${reviewState === REVIEW_STATES.PROCESS}"><span class="decision-icon" aria-hidden="true">✓</span>처리</button>
+  <button class="c-decision exclude" data-state="${REVIEW_STATES.EXCLUDE}" aria-pressed="${reviewState === REVIEW_STATES.EXCLUDE}"><span class="decision-icon" aria-hidden="true">—</span>제외</button>
 </div>
 <button class="cand-toggle" aria-expanded="${isOpen}"
         aria-label="${escapeHtml(forWhat)} 상세 ${isOpen ? '접기' : '펼치기'}">${isOpen ? '▴' : '▾'}</button>

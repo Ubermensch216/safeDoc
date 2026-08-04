@@ -1,6 +1,7 @@
 // 앱 진입점 — 화면 전환·이벤트 연결 (개인정보 원문은 콘솔·저장소에 기록하지 않는다)
 
 import './style.css';
+import brandLogoUrl from './assets/safedoc-logo.png';
 import { PROGRAM_NAME, PROGRAM_VERSION } from './version.js';
 import { RULE_VERSION } from './detect/engine.js';
 import { PII_TYPES, ACTION_LABELS, CONFIDENCE_LEVELS } from './detect/types.js';
@@ -20,10 +21,15 @@ import { AppError } from './core/errors.js';
 import { checkAvailability, DEFAULT_ENDPOINT, DEFAULT_MODEL } from './ai/ollamaClient.js';
 import { runAiDetection, createAiStats, estimateChunks, DEFAULT_MAX_CHUNKS } from './ai/aiDetect.js';
 import { AiRunLifecycle } from './ai/lifecycle.js';
-import { $, $$, toast, showScreen, textOffsetIn, escapeHtml } from './ui/dom.js';
+import { $, $$, toast, showScreen, textOffsetIn, renderedOffsetToSource, escapeHtml } from './ui/dom.js';
 import { CandidateListView } from './ui/candidateList.js';
 import { PreviewHighlighter, buildPreviewHtml } from './ui/highlight.js';
 import { renderAfterHtml, renderSummaryHtml, renderDocMeta } from './ui/render.js';
+
+// 배포판은 단일 HTML만 서빙하므로 로고도 번들 안의 data URL로 주입한다.
+// 같은 소스를 배너와 브라우저/홈 화면 아이콘에 사용해 실행 경로에 영향을 받지 않게 한다.
+for (const logo of document.querySelectorAll('.brand-logo')) logo.src = brandLogoUrl;
+for (const icon of document.querySelectorAll('[data-brand-icon]')) icon.href = brandLogoUrl;
 
 const session = new WorkSession();
 let userRules = [];          // 사용자 정의 탐지 규칙 (세션 한정, FR-803)
@@ -589,8 +595,8 @@ function bindReviewEvents() {
     if (start < 0 || end < 0) return;
     if (start > end) [start, end] = [end, start];
     if (start === end) return;
-    start += highlighter.windowStart;
-    end += highlighter.windowStart;
+    start = renderedOffsetToSource(session.parsed.text, highlighter.windowStart, start);
+    end = renderedOffsetToSource(session.parsed.text, highlighter.windowStart, end);
 
     pushHistory();
     const ok = addManualCandidate(start, end, $('#add-type').value);
