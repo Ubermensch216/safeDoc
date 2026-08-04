@@ -5,6 +5,12 @@ import { PROGRAM_NAME, PROGRAM_VERSION } from './version.js';
 import { RULE_VERSION } from './detect/engine.js';
 import { PII_TYPES, ACTION_LABELS, CONFIDENCE_LEVELS } from './detect/types.js';
 import { WorkSession } from './core/session.js';
+import {
+  REVIEW_STATES,
+  ensureReviewStates,
+  reviewCounts,
+  setReviewState,
+} from './core/reviewState.js';
 import { validateAndRead, downloadBlob, resultFileName } from './core/fileManager.js';
 import { parseDocument, analyze, buildResult, restoreDocument } from './core/analyzer.js';
 import { applyToText } from './core/deidentify.js';
@@ -17,7 +23,7 @@ import { AiRunLifecycle } from './ai/lifecycle.js';
 import { $, $$, toast, showScreen, textOffsetIn, escapeHtml } from './ui/dom.js';
 import { CandidateListView } from './ui/candidateList.js';
 import { PreviewHighlighter, buildPreviewHtml } from './ui/highlight.js';
-import { renderAfterHtml, renderSummaryHtml, renderTypeChips, renderDocMeta } from './ui/render.js';
+import { renderAfterHtml, renderSummaryHtml, renderDocMeta } from './ui/render.js';
 
 const session = new WorkSession();
 let userRules = [];          // 사용자 정의 탐지 규칙 (세션 한정, FR-803)
@@ -26,7 +32,7 @@ let manualSeq = 0;
 
 let listView = null;
 let highlighter = null;
-let activeFilter = { type: null, source: null };
+let activeFilter = { type: null, status: 'all' };
 
 // AI 상태
 const aiLifecycle = new AiRunLifecycle(); // 이전 문서의 비동기 실행을 현재 세션과 격리
@@ -58,6 +64,7 @@ function init() {
   bindResultEvents();
   bindRestoreEvents();
   bindSettingsEvents();
+  bindSettingsNavigation();
 
   refreshAiAvailability();
 }
@@ -106,6 +113,8 @@ function populateSelects() {
   $('#search-type').value = 'CUSTOM';
   $('#add-type').value = 'CUSTOM';
 
+  $('#type-filter').innerHTML = `<option value="">전체 유형</option>${options}`;
+
   $('#bulk-action').innerHTML = Object.entries(ACTION_LABELS)
     .map(([code, label]) => `<option value="${code}">${escapeHtml(label)}</option>`)
     .join('');
@@ -115,8 +124,10 @@ function populateSelects() {
 
 function setAiBadge(state, text) {
   const badge = $('#ai-badge');
-  badge.className = `tbadge ${state}`;
+  badge.className = `security-state ${state}`;
   $('#ai-badge-text').textContent = text;
+  const settingsState = $('#settings-ai-state');
+  if (settingsState) settingsState.textContent = text;
 }
 
 async function refreshAiAvailability() {
@@ -141,34 +152,33 @@ async function refreshAiAvailability() {
 
 // ---------- 탭 전환 ----------
 
-// WAI-ARIA 탭 패턴: 선택 상태를 aria-selected로 알리고,
-// 탭 사이 이동은 Tab 키가 아니라 좌우 방향키로 한다(로빙 tabindex).
 function activateTab(btn, { focus = false } = {}) {
   $$('.tab-btn').forEach((b) => {
     const on = b === btn;
     b.classList.toggle('active', on);
-    b.setAttribute('aria-selected', String(on));
-    b.tabIndex = on ? 0 : -1;
+    if (on) b.setAttribute('aria-current', 'page');
+    else b.removeAttribute('aria-current');
   });
   $$('.tab-panel').forEach((p) => p.classList.remove('active'));
   $(`#tab-${btn.dataset.tab}`).classList.add('active');
+  const titles = {
+    deidentify: ['비식별 작업', session.parsed ? '개인정보 검토' : '새 비식별 작업'],
+    restore: ['도구', '원본 복원'],
+    settings: ['관리', '설정'],
+  };
+  const [eyebrow, title] = titles[btn.dataset.tab];
+  $('#page-eyebrow').textContent = eyebrow;
+  $('#page-title').textContent = title;
   if (focus) btn.focus();
 }
 
 function bindTabEvents() {
-  const btns = $$('.tab-btn');
-  btns.forEach((btn, i) => {
+  $$('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => activateTab(btn));
-    btn.addEventListener('keydown', (e) => {
-      const map = { ArrowRight: 1, ArrowLeft: -1, Home: 'first', End: 'last' };
-      const move = map[e.key];
-      if (move === undefined) return;
-      e.preventDefault();
-      const next = move === 'first' ? 0
-        : move === 'last' ? btns.length - 1
-          : (i + move + btns.length) % btns.length;
-      activateTab(btns[next], { focus: true });
-    });
+  });
+  $('#btn-new-task').addEventListener('click', () => {
+    activateTab($('#tabbtn-deidentify'));
+    if (!session.parsed || window.confirm('현재 작업 데이터를 지우고 새 작업을 시작하시겠습니까?')) newSession();
   });
 }
 
@@ -234,6 +244,14 @@ function setProgress(percent, statusText) {
   $('#analyze-progress').style.width = `${percent}%`;
   $('#analyze-progressbar').setAttribute('aria-valuenow', String(Math.round(percent)));
   $('#analyze-status').textContent = statusText;
+  const order = ['open', 'extract', 'rules', 'prepare'];
+  const activeAt = percent < 35 ? 0 : percent < 65 ? 1 : percent < 100 ? 2 : 3;
+  order.forEach((key, index) => {
+    const item = $(`[data-analysis="${key}"]`);
+    item.classList.toggle('done', index < activeAt || percent === 100);
+    item.classList.toggle('active', index === activeAt && percent < 100);
+    item.querySelector('.analysis-icon').textContent = index < activeAt || percent === 100 ? '✓' : (index === activeAt ? '●' : '○');
+  });
 }
 
 // 보조기술 전용 알림. 토스트와 달리 화면에는 나타나지 않는다.
@@ -259,6 +277,7 @@ async function runAnalysis() {
     if (analyzeCancelled) throw new AppError('E010');
 
     session.candidates = analyze(session.parsed, userRules);
+    ensureReviewStates(session.candidates);
     setProgress(100, '탐지 완료');
     await yieldUi();
     if (analyzeCancelled) throw new AppError('E010');
@@ -286,22 +305,36 @@ function syncReview({ resort = false } = {}) {
   listView.setFilter(activeFilter);
   const visible = listView.sync(session.candidates, { resort });
 
-  $('#type-chips').innerHTML = renderTypeChips(session.candidates, activeFilter);
-
-  const total = session.candidates.length;
-  const selected = session.candidates.filter((c) => c.selected).length;
-  // 제목 줄이 길면 검색 상자가 다음 줄로 밀려 목록이 그만큼 짧아진다.
-  // 화면에는 숫자만, 읽어 주는 문장은 aria-label에 둔다.
+  const counts = reviewCounts(session.candidates);
+  const reviewed = counts.process + counts.exclude;
   const badge = $('#detect-count-badge');
-  badge.textContent = `${selected}/${total}`;
-  badge.setAttribute('aria-label', `총 ${total}건 중 ${selected}건 처리 대상`);
+  badge.textContent = `${visible}건 표시`;
+  badge.setAttribute('aria-label', `총 ${counts.total}건 중 ${visible}건 표시`);
 
-  const filtered = activeFilter.type || activeFilter.source;
+  $('#review-done-count').textContent = reviewed.toLocaleString();
+  $('#review-total-count').textContent = `/ ${counts.total.toLocaleString()}`;
+  $('#review-meter-fill').style.width = `${counts.total ? reviewed / counts.total * 100 : 100}%`;
+  $('#count-pending').textContent = counts.pending.toLocaleString();
+  $('#count-process').textContent = counts.process.toLocaleString();
+  $('#count-exclude').textContent = counts.exclude.toLocaleString();
+  const aiCount = session.candidates.filter((c) => c.aiOnly).length;
+  const disputedCount = session.candidates.filter((c) => c.aiDisputed).length;
+  const manualCount = session.candidates.filter((c) => ['MANUAL', 'SEARCH'].includes(c.detectionMethod)).length;
+  $('#count-ai').textContent = aiCount.toLocaleString();
+  $('#filter-count-all').textContent = counts.total;
+  $('#filter-count-pending').textContent = counts.pending;
+  $('#filter-count-ai').textContent = aiCount;
+  $('#filter-count-disputed').textContent = disputedCount;
+  $('#filter-count-exclude').textContent = counts.exclude;
+  $('#filter-count-manual').textContent = manualCount;
+  $('#review-footer-summary').innerHTML = `<strong>${counts.process.toLocaleString()}개 처리</strong> · ${counts.exclude.toLocaleString()}개 제외 · ${counts.pending.toLocaleString()}개 미확인`;
+  $('#btn-to-confirm').disabled = counts.pending > 0;
+
+  const filtered = activeFilter.type || activeFilter.status !== 'all';
   $('#filter-actions').hidden = !filtered;
   if (filtered) {
-    const label = activeFilter.type
-      ? (PII_TYPES[activeFilter.type]?.label || activeFilter.type)
-      : (activeFilter.source === 'ai' ? 'AI 발견' : 'AI 오탐 의심');
+    const statusLabels = { pending: '확인 필요', ai: 'AI 발견', disputed: '오탐 의심', exclude: '처리 제외', manual: '수동 추가' };
+    const label = activeFilter.type ? (PII_TYPES[activeFilter.type]?.label || activeFilter.type) : statusLabels[activeFilter.status];
     $('#filter-label').textContent = `${label} ${visible}건`;
   }
 
@@ -311,17 +344,19 @@ function syncReview({ resort = false } = {}) {
 // 판단이 갈리는 항목을 손대지 않은 채 실행하면, 확인 체크박스 하나로 전부 통과한다.
 // 무엇이 남아 있는지 실행 직전에 눈에 보이게 한다.
 function reviewGaps() {
+  const pending = session.candidates.filter((c) => c.reviewState === REVIEW_STATES.PENDING);
   const disputed = session.candidates.filter((c) => c.aiDisputed && !c.userModified);
   const lowConf = session.candidates.filter(
     (c) => c.confidence < CONFIDENCE_LEVELS.MEDIUM && !c.userModified,
   );
-  return { disputed, lowConf };
+  return { pending, disputed, lowConf };
 }
 
 function updateReviewGap() {
   const box = $('#review-gap');
-  const { disputed, lowConf } = reviewGaps();
+  const { pending, disputed, lowConf } = reviewGaps();
   const parts = [];
+  if (pending.length > 0) parts.push(`<strong>미확인 ${pending.length}건</strong>`);
   if (disputed.length > 0) parts.push(`<strong>AI 오탐 의심 ${disputed.length}건</strong>`);
   if (lowConf.length > 0) parts.push(`<strong>신뢰도 낮음 ${lowConf.length}건</strong>`);
 
@@ -400,18 +435,17 @@ function bindReviewEvents() {
     if (e.target.classList.contains('c-same')) {
       // 동일값 일괄 (FR-406)
       pushHistory();
-      const target = !c.selected; // 현재 상태의 반대로 일괄 적용한다
+      const targetState = c.reviewState === REVIEW_STATES.PROCESS ? REVIEW_STATES.EXCLUDE : REVIEW_STATES.PROCESS;
       let count = 0;
       for (const other of session.candidates) {
         if (other.originalText === c.originalText && other.type === c.type) {
-          other.selected = target;
+          setReviewState(other, targetState);
           other.action = c.action;
-          markUserModified(other);
           count += 1;
         }
       }
       syncReview();
-      toast(`동일한 값 ${count}건을 ${target ? '처리 대상으로 지정' : '제외'}했습니다.`);
+      toast(`동일한 값 ${count}건을 ${targetState === REVIEW_STATES.PROCESS ? '처리 대상으로 지정' : '제외'}했습니다.`);
       return;
     }
 
@@ -421,10 +455,9 @@ function bindReviewEvents() {
       return;
     }
 
-    if (e.target.classList.contains('c-check')) {
+    if (e.target.classList.contains('c-decision')) {
       pushHistory();
-      c.selected = e.target.checked;
-      markUserModified(c);
+      setReviewState(c, e.target.dataset.state);
       syncReview();
       return;
     }
@@ -457,14 +490,20 @@ function bindReviewEvents() {
     }
   });
 
-  // 유형·출처 필터 칩
-  $('#type-chips').addEventListener('click', (e) => {
-    const chip = e.target.closest('.chip');
-    if (!chip) return;
-    const key = chip.dataset.chip;
-    if (key === 'all') activeFilter = { type: null, source: null };
-    else if (key === 'ai' || key === 'disputed') activeFilter = { type: null, source: key };
-    else activeFilter = { type: key, source: null };
+  $('#status-filters').addEventListener('click', (e) => {
+    const button = e.target.closest('.status-filter');
+    if (!button) return;
+    activeFilter.status = button.dataset.status;
+    $$('.status-filter').forEach((item) => {
+      const active = item === button;
+      item.classList.toggle('active', active);
+      item.setAttribute('aria-pressed', String(active));
+    });
+    syncReview();
+  });
+
+  $('#type-filter').addEventListener('change', (e) => {
+    activeFilter.type = e.target.value || null;
     syncReview();
   });
 
@@ -473,18 +512,23 @@ function bindReviewEvents() {
     const action = e.target.dataset.bulk;
     if (!action) return;
     if (action === 'clear') {
-      activeFilter = { type: null, source: null };
+      activeFilter = { type: null, status: 'all' };
+      $('#type-filter').value = '';
+      $$('.status-filter').forEach((item) => {
+        const active = item.dataset.status === 'all';
+        item.classList.toggle('active', active);
+        item.setAttribute('aria-pressed', String(active));
+      });
       syncReview();
       return;
     }
     pushHistory();
     const targets = session.candidates.filter((c) => listView.isVisible(c));
     for (const c of targets) {
-      c.selected = action === 'select';
-      markUserModified(c);
+      setReviewState(c, action === 'process' ? REVIEW_STATES.PROCESS : REVIEW_STATES.EXCLUDE);
     }
     syncReview();
-    toast(`${targets.length}건을 ${action === 'select' ? '선택' : '해제'}했습니다.`);
+    toast(`${targets.length}건을 ${action === 'process' ? '처리 대상으로 지정' : '제외'}했습니다.`);
   });
 
   $('#bulk-action').addEventListener('change', (e) => {
@@ -505,12 +549,12 @@ function bindReviewEvents() {
 
   $('#btn-select-all').addEventListener('click', () => {
     pushHistory();
-    session.candidates.forEach((c) => { c.selected = true; markUserModified(c); });
+    session.candidates.forEach((c) => setReviewState(c, REVIEW_STATES.PROCESS));
     syncReview();
   });
   $('#btn-deselect-all').addEventListener('click', () => {
     pushHistory();
-    session.candidates.forEach((c) => { c.selected = false; markUserModified(c); });
+    session.candidates.forEach((c) => setReviewState(c, REVIEW_STATES.EXCLUDE));
     syncReview();
   });
 
@@ -554,10 +598,33 @@ function bindReviewEvents() {
     syncReview();
     highlighter.renderNow(session.parsed.text, session.candidates);
     toast(ok ? '개인정보로 추가했습니다.' : '기존 후보와 겹치는 영역입니다.', !ok);
+    $('#selection-popover').hidden = true;
   });
+
+  const updateSelectionPopover = () => {
+    const selection = window.getSelection();
+    const preview = $('#preview');
+    $('#selection-popover').hidden = !selection || selection.isCollapsed
+      || !preview.contains(selection.anchorNode) || !preview.contains(selection.focusNode);
+  };
+  $('#preview').addEventListener('mouseup', updateSelectionPopover);
+  $('#preview').addEventListener('keyup', updateSelectionPopover);
 
   // 되돌리기 (FR-409)
   $('#btn-undo').addEventListener('click', undo);
+
+  $('#btn-to-confirm').addEventListener('click', () => {
+    const counts = reviewCounts(session.candidates);
+    if (counts.pending > 0) {
+      activeFilter.status = 'pending';
+      syncReview();
+      toast(`미확인 후보 ${counts.pending}건을 먼저 확인해 주십시오.`, true);
+      return;
+    }
+    renderConfirmScreen();
+    showScreen('screen-confirm');
+  });
+  $('#btn-back-review').addEventListener('click', () => showScreen('screen-review'));
 
   // 최종 확인 후 실행 (FR-410)
   $('#final-confirm').addEventListener('change', (e) => {
@@ -565,8 +632,10 @@ function bindReviewEvents() {
   });
   $('#btn-execute').addEventListener('click', executeDeidentify);
   $('#btn-cancel-analyze').addEventListener('click', () => { analyzeCancelled = true; });
-  $('#btn-cancel-ai').addEventListener('click', () => {
-    stopAiPass();
+  $('#btn-cancel-ai').addEventListener('click', async () => {
+    const stoppedStats = await stopAiPass({ wait: true });
+    if (stoppedStats) aiStats = stoppedStats;
+    setAiBadge('off', 'AI 중단됨');
     toast('AI 탐지를 중단했습니다. 규칙 기반 결과는 그대로 유지됩니다.');
   });
 }
@@ -621,11 +690,17 @@ function bindKeyboard() {
     const current = listView.cursorId ? findCandidate(listView.cursorId) : null;
     if (!current) return;
 
-    if (key === ' ') {
+    if (key === 'i') {
       e.preventDefault();
       pushHistory();
-      current.selected = !current.selected;
-      markUserModified(current);
+      setReviewState(current, REVIEW_STATES.PROCESS);
+      syncReview();
+      return;
+    }
+    if (key === 'x') {
+      e.preventDefault();
+      pushHistory();
+      setReviewState(current, REVIEW_STATES.EXCLUDE);
       syncReview();
       return;
     }
@@ -664,6 +739,7 @@ function addManualCandidate(start, end, type, method = 'MANUAL') {
     detectionMethod: method,
     context: '',
     selected: true,
+    reviewState: REVIEW_STATES.PROCESS,
     action: null,
     replacementText: null,
     userModified: true,
@@ -687,7 +763,9 @@ function addCandidatesByText(term, type, method) {
 
 async function stopAiPass({ wait = false } = {}) {
   const stopped = aiLifecycle.stop({ wait });
-  $('#ai-status').hidden = true;
+  const statusBox = $('#ai-status');
+  statusBox.hidden = true;
+  statusBox.setAttribute('aria-busy', 'false');
   return wait ? await stopped : null;
 }
 
@@ -741,6 +819,7 @@ async function performAiPass(run, parsed, candidates, initialStats) {
   }
   const statusBox = $('#ai-status');
   statusBox.hidden = false;
+  statusBox.setAttribute('aria-busy', 'true');
   setAiBadge('busy', 'AI 탐지 중…');
   updateAiProgress(0, Math.min(chunkCount, DEFAULT_MAX_CHUNKS), 0);
 
@@ -752,6 +831,7 @@ async function performAiPass(run, parsed, candidates, initialStats) {
       onChunkMerged: ({ index, total, added, stats }) => {
         if (!aiLifecycle.isCurrent(run) || session.parsed !== parsed) return;
         updateAiProgress(index + 1, total, stats.addedCount);
+        ensureReviewStates(added);
         // 새 후보가 도착했으므로 목록·미리보기를 갱신한다.
         // sync는 기존 카드를 재사용하므로 스크롤·펼침 상태가 유지된다.
         syncReview();
@@ -773,6 +853,7 @@ async function performAiPass(run, parsed, candidates, initialStats) {
   } finally {
     if (aiLifecycle.isCurrent(run) && session.parsed === parsed) {
       statusBox.hidden = true;
+      statusBox.setAttribute('aria-busy', 'false');
       highlighter.renderNow(parsed.text, candidates);
       // AI 결과가 붙으면서 각 후보의 검토 우선순위가 바뀌었으므로 여기서 한 번 재정렬한다.
       // 청크마다 재정렬하면 검토 중인 사용자 눈앞에서 카드가 계속 움직인다.
@@ -811,6 +892,38 @@ function updateAiProgress(done, total, added) {
 
 // ---------- 비식별 실행 및 결과 ----------
 
+function renderConfirmScreen() {
+  const counts = reviewCounts(session.candidates);
+  $('#confirm-process-count').textContent = counts.process.toLocaleString();
+  $('#confirm-exclude-count').textContent = counts.exclude.toLocaleString();
+  $('#confirm-pending-count').textContent = counts.pending.toLocaleString();
+
+  const actionCounts = {};
+  for (const candidate of session.candidates.filter((c) => c.reviewState === REVIEW_STATES.PROCESS)) {
+    const action = candidate.action || session.typePolicies[candidate.type] || 'REPLACE';
+    actionCounts[action] = (actionCounts[action] || 0) + 1;
+  }
+  $('#confirm-action-counts').innerHTML = Object.entries(ACTION_LABELS).map(([action, label]) =>
+    `<div class="action-count-row"><span>${escapeHtml(label)}</span><strong>${(actionCounts[action] || 0).toLocaleString()}개</strong></div>`).join('');
+
+  const aiWarning = $('#confirm-ai-warning');
+  const aiRunning = !$('#ai-status').hidden;
+  aiWarning.hidden = !aiRunning;
+  if (aiRunning) aiWarning.textContent = 'AI 추가 탐지가 아직 진행 중입니다. 지금 실행하면 AI 검사를 중단하고 미완료 상태를 처리 기록에 남깁니다.';
+  $('#final-confirm').checked = false;
+  $('#btn-execute').disabled = true;
+}
+
+function renderChangeList(applied) {
+  if (applied.length === 0) return '<p class="empty-state">변경된 항목이 없습니다.</p>';
+  return applied.map((item) => `
+    <div class="change-item">
+      <code title="${escapeHtml(item.originalText)}">${escapeHtml(item.originalText)}</code>
+      <span class="change-arrow" aria-hidden="true">→</span>
+      <code title="${escapeHtml(item.replacementText)}">${escapeHtml(item.replacementText)}</code>
+    </div>`).join('');
+}
+
 async function executeDeidentify() {
   const executeButton = $('#btn-execute');
   const startedAt = new Date();
@@ -828,9 +941,12 @@ async function executeDeidentify() {
     const summary = buildSummary({
       session, applied, startedAt, finishedAt: new Date(), resultName, aiStats,
     });
-    const mappingTable = buildMappingTable(session.file.name, resultName, applied, aiStats);
+    const shouldCreateMapping = document.querySelector('input[name="mapping-choice"]:checked')?.value === 'yes';
+    const mappingTable = shouldCreateMapping
+      ? buildMappingTable(session.file.name, resultName, applied, aiStats)
+      : null;
 
-    session.result = { blob, fileName: resultName, afterText, applied, summary, mappingTable };
+    session.result = { blob, fileName: resultName, afterText, applied, summary, mappingTable, mappingCreated: shouldCreateMapping };
 
     // AI 미완료 경고 — 완료된 것으로 오인하면 유출로 이어진다
     const aiWarn = $('#ai-incomplete-warning');
@@ -857,6 +973,11 @@ async function executeDeidentify() {
     $('#compare-before').innerHTML =
       buildPreviewHtml(session.parsed.text, session.candidates.filter((c) => c.selected));
     $('#compare-after').innerHTML = renderAfterHtml(afterText, applied);
+    $('#compare-changes').innerHTML = renderChangeList(applied);
+    $('#btn-download-mapping').hidden = !shouldCreateMapping;
+    $('#mapping-result-note').textContent = shouldCreateMapping
+      ? '개인정보 원문이 포함된 민감정보입니다. 결과 문서와 분리 보관하십시오.'
+      : '대응표를 생성하지 않았습니다.';
     showScreen('screen-result');
   } catch (err) {
     showError(err);
@@ -871,7 +992,7 @@ function bindResultEvents() {
   });
 
   $('#btn-download-mapping').addEventListener('click', () => {
-    if (!session.result) return;
+    if (!session.result?.mappingTable) return;
     if (!window.confirm('대응표 파일에는 개인정보 원문이 평문으로 포함됩니다.\n안전한 위치에 보관할 수 있는 경우에만 다운로드하십시오.\n\n계속하시겠습니까?')) return;
     const name = resultFileName(session.file.name, '_대응표').replace(/\.[^.]+$/, '.json');
     downloadBlob(mappingTableToBlob(session.result.mappingTable), name);
@@ -883,14 +1004,14 @@ function bindResultEvents() {
     downloadBlob(summaryToBlob(session.result.summary), name);
   });
 
-  // 처리 전/후 토글
+  // 변경 항목/처리 후/처리 전 토글
   $$('.seg-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       $$('.seg-btn').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
-      const showAfter = btn.dataset.compare === 'after';
-      $('#compare-after').hidden = !showAfter;
-      $('#compare-before').hidden = showAfter;
+      $('#compare-changes').hidden = btn.dataset.compare !== 'changes';
+      $('#compare-after').hidden = btn.dataset.compare !== 'after';
+      $('#compare-before').hidden = btn.dataset.compare !== 'before';
     });
   });
 
@@ -915,15 +1036,24 @@ function newSession() {
 function resetReviewUi() {
   listView.clear();
   highlighter.clear();
-  activeFilter = { type: null, source: null };
-  $('#type-chips').innerHTML = '';
+  activeFilter = { type: null, status: 'all' };
+  $('#type-filter').value = '';
+  $$('.status-filter').forEach((item) => {
+    const active = item.dataset.status === 'all';
+    item.classList.toggle('active', active);
+    item.setAttribute('aria-pressed', String(active));
+  });
   $('#filter-actions').hidden = true;
+  $('#selection-popover').hidden = true;
+  $('#compare-changes').innerHTML = '';
   $('#compare-before').innerHTML = '';
   $('#compare-after').innerHTML = '';
   $('#result-summary').innerHTML = '';
   $('#doc-meta').innerHTML = '';
   $('#final-confirm').checked = false;
   $('#btn-execute').disabled = true;
+  document.querySelector('input[name="mapping-choice"][value="no"]').checked = true;
+  $('#btn-download-mapping').hidden = true;
   $('#search-input').value = '';
   $('#ai-incomplete-warning').hidden = true;
   $('#unprocessed-warning').hidden = true;
@@ -936,12 +1066,39 @@ function bindRestoreEvents() {
   const docInput = $('#restore-doc-input');
   const mapInput = $('#restore-map-input');
   const btn = $('#btn-restore');
+  const validation = $('#restore-validation');
+  let validatedTable = null;
 
-  const updateBtn = () => {
-    btn.disabled = !(docInput.files.length > 0 && mapInput.files.length > 0);
+  const validatePair = async () => {
+    btn.disabled = true;
+    validatedTable = null;
+    if (!(docInput.files.length > 0 && mapInput.files.length > 0)) {
+      validation.className = 'restore-validation muted';
+      validation.textContent = '두 파일을 선택하면 일치 여부와 복원 가능 항목을 확인합니다.';
+      return;
+    }
+    try {
+      const docFile = docInput.files[0];
+      const table = parseMappingTable(await mapInput.files[0].text());
+      const matches = !table.resultFileName || table.resultFileName === docFile.name;
+      const reversible = table.mappings.filter((item) => item.reversible).length;
+      const irreversible = table.mappings.length - reversible;
+      if (!matches) {
+        validation.className = 'restore-validation alert-warn';
+        validation.textContent = `파일이 일치하지 않습니다. 이 대응표는 “${table.resultFileName}”용입니다.`;
+        return;
+      }
+      validatedTable = table;
+      validation.className = 'restore-validation alert-ok';
+      validation.textContent = `파일 일치 확인 · 복원 가능 ${reversible}건 · 복원 불가 ${irreversible}건 · 원본 파일은 덮어쓰지 않습니다.`;
+      btn.disabled = reversible === 0;
+    } catch (err) {
+      validation.className = 'restore-validation alert-warn';
+      validation.textContent = err.message || '대응표 파일을 확인할 수 없습니다.';
+    }
   };
-  docInput.addEventListener('change', updateBtn);
-  mapInput.addEventListener('change', updateBtn);
+  docInput.addEventListener('change', validatePair);
+  mapInput.addEventListener('change', validatePair);
 
   btn.addEventListener('click', async () => {
     try {
@@ -949,7 +1106,7 @@ function bindRestoreEvents() {
       const mapFile = mapInput.files[0];
       const read = await validateAndRead(docFile);
       const parsed = await parseDocument(read);
-      const mappingTable = parseMappingTable(await mapFile.text());
+      const mappingTable = validatedTable || parseMappingTable(await mapFile.text());
 
       const { blob, restoredCount, notRestoredCount } = await restoreDocument(parsed, mappingTable);
       const name = resultFileName(docFile.name, '_복원');
@@ -977,6 +1134,21 @@ function renderPolicyList() {
     `<option value="${a}"${session.typePolicies[code] === a ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('')}
   </select>
 </div>`).join('');
+}
+
+function bindSettingsNavigation() {
+  $$('.settings-nav-btn').forEach((button) => {
+    button.addEventListener('click', () => {
+      $$('.settings-nav-btn').forEach((item) => item.classList.toggle('active', item === button));
+      $$('.settings-panel').forEach((panel) => panel.classList.toggle('active', panel.dataset.settingsPanel === button.dataset.settings));
+      const activePanel = $(`[data-settings-panel="${button.dataset.settings}"]`);
+      const heading = activePanel?.querySelector('h3');
+      if (heading) {
+        heading.tabIndex = -1;
+        heading.focus();
+      }
+    });
+  });
 }
 
 function bindSettingsEvents() {

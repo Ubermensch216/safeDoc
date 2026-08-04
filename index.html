@@ -3,12 +3,6 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <!--
-    콘텐츠 보안정책 (기술명세서 Ⅻ-2)
-    connect-src는 이 PC 안의 AI 엔진(Ollama, 루프백 주소)만 허용한다.
-    그 외 모든 외부 통신은 차단되므로 문서와 개인정보는 이 PC를 벗어나지 않는다.
-    단일 HTML 배포를 위해 인라인 스크립트·스타일만 허용한다.
-  -->
   <meta http-equiv="Content-Security-Policy"
     content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline'; connect-src http://localhost:11434 http://127.0.0.1:11434; img-src 'self' data: blob:; media-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';" />
   <title>개인정보 비식별화 프로그램</title>
@@ -16,306 +10,280 @@
 <body>
   <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
 
-  <header class="app-header">
-    <h1 class="brand">
-      <span class="brand-mark" aria-hidden="true">🛡</span>
-      <span class="brand-name">safeDoc</span>
-      <span class="sr-only">개인정보 비식별화 프로그램</span>
-      <span class="brand-version" id="version-info"></span>
-    </h1>
+  <div class="app-shell">
+    <aside class="app-sidebar" aria-label="safeDoc 메뉴">
+      <h1 class="brand">
+        <span class="brand-symbol" aria-hidden="true">S</span>
+        <span class="brand-copy"><span class="brand-name">safeDoc</span><span class="brand-version" id="version-info"></span></span>
+        <span class="sr-only">개인정보 비식별화 프로그램</span>
+      </h1>
 
-    <nav class="tabs" role="tablist" aria-label="주요 기능">
-      <button class="tab-btn active" data-tab="deidentify" role="tab"
-              id="tabbtn-deidentify" aria-controls="tab-deidentify" aria-selected="true" tabindex="0">비식별 처리</button>
-      <button class="tab-btn" data-tab="restore" role="tab"
-              id="tabbtn-restore" aria-controls="tab-restore" aria-selected="false" tabindex="-1">원본 복원</button>
-      <button class="tab-btn" data-tab="settings" role="tab"
-              id="tabbtn-settings" aria-controls="tab-settings" aria-selected="false" tabindex="-1">설정</button>
-    </nav>
+      <button id="btn-new-task" class="btn primary new-task-btn" aria-label="새 비식별 작업">
+        <span aria-hidden="true">＋</span><span class="nav-label">새 비식별 작업</span>
+      </button>
 
-    <div class="trust-badges">
-      <span class="tbadge tbadge-offline" title="문서와 개인정보는 이 PC를 벗어나지 않습니다">
-        <span class="dot"></span>오프라인 처리
-      </span>
-      <span class="tbadge" id="ai-badge" title="AI 엔진 상태">
-        <span class="dot"></span><span id="ai-badge-text">AI 확인 중…</span>
-      </span>
-    </div>
-  </header>
+      <nav class="side-nav" aria-label="주요 기능">
+        <p class="nav-section-label">작업</p>
+        <button class="tab-btn active" data-tab="deidentify" id="tabbtn-deidentify" aria-current="page" aria-label="비식별 처리">
+          <span class="nav-icon" aria-hidden="true">▤</span><span class="nav-label">비식별 처리</span>
+        </button>
+        <p class="nav-section-label">도구</p>
+        <button class="tab-btn" data-tab="restore" id="tabbtn-restore" aria-label="원본 복원">
+          <span class="nav-icon" aria-hidden="true">↶</span><span class="nav-label">원본 복원</span>
+        </button>
+        <p class="nav-section-label">관리</p>
+        <button class="tab-btn" data-tab="settings" id="tabbtn-settings" aria-label="설정">
+          <span class="nav-icon" aria-hidden="true">⚙</span><span class="nav-label">설정</span>
+        </button>
+      </nav>
 
-  <main id="main-content">
-    <!-- ============ 비식별 처리 탭 ============ -->
-    <section id="tab-deidentify" class="tab-panel active" role="tabpanel" aria-labelledby="tabbtn-deidentify">
-
-      <!-- 1단계: 업로드 -->
-      <div id="screen-main" class="screen active">
-        <ol class="steps" aria-label="진행 단계">
-          <li class="step current" aria-current="step">문서 선택</li><li class="step">분석</li><li class="step">검토</li><li class="step">결과</li>
-        </ol>
-
-        <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="문서 선택 또는 끌어놓기">
-          <span class="drop-icon" aria-hidden="true">↓</span>
-          <p class="drop-main">문서를 끌어놓거나 클릭하여 선택하십시오</p>
-          <p class="drop-sub">TXT · CSV · XLSX · DOCX · HWPX · 텍스트 PDF &nbsp;|&nbsp; 최대 20MB</p>
-          <input type="file" id="file-input" accept=".txt,.csv,.xlsx,.docx,.hwpx,.pdf" hidden />
+      <div class="sidebar-status">
+        <div class="security-state"><span class="dot"></span><span class="nav-label">로컬 처리</span></div>
+        <div class="security-state" id="ai-badge" title="AI 엔진 상태">
+          <span class="dot"></span><span class="nav-label" id="ai-badge-text">AI 확인 중…</span>
         </div>
-
-        <div class="cards">
-          <div class="card card-accent">
-            <h3>어떻게 동작합니까</h3>
-            <p>규칙 기반 탐지가 주민등록번호·카드번호 같은 <strong>정형 개인정보</strong>를 검증 알고리즘으로 잡아냅니다.
-               이어서 이 PC 안의 AI가 문맥을 읽어 규칙이 놓치는 <strong>이름·주소</strong>를 추가로 찾습니다.</p>
-            <p class="muted">AI 없이 규칙만으로도 동작합니다.</p>
-          </div>
-          <div class="card">
-            <h3>개인정보 보호</h3>
-            <ul>
-              <li>문서와 개인정보는 <strong>이 PC를 벗어나지 않습니다.</strong></li>
-              <li>AI를 쓸 때도 <strong>이 PC 안의 엔진(localhost)</strong>과만 통신하며, 그 외 통신은 보안정책으로 차단됩니다.</li>
-              <li>원본 파일은 변경되지 않습니다.</li>
-            </ul>
-          </div>
-          <div class="card card-warn">
-            <h3>반드시 확인하십시오</h3>
-            <ul>
-              <li>자동 탐지는 <strong>모든 개인정보를 찾지 못할 수 있습니다.</strong> 검토 화면에서 직접 확인해야 합니다.</li>
-              <li>대응표 파일에는 개인정보 원문이 평문으로 들어갑니다. 결과 파일과 분리 보관하십시오.</li>
-              <li>지원 제외: 구형 HWP·DOC·XLS, 암호·DRM 문서, 스캔 이미지 PDF</li>
-            </ul>
-          </div>
-        </div>
+        <p class="sidebar-note nav-label">문서와 개인정보는<br />이 PC를 벗어나지 않습니다.</p>
       </div>
+    </aside>
 
-      <!-- 2단계: 분석 -->
-      <div id="screen-analyze" class="screen">
-        <ol class="steps" aria-label="진행 단계">
-          <li class="step done">문서 선택</li><li class="step current" aria-current="step">분석</li><li class="step">검토</li><li class="step">결과</li>
-        </ol>
-        <div class="panel panel-center">
-          <h2>문서를 분석하고 있습니다</h2>
-          <div id="analyze-file-info" class="file-info"></div>
-          <div class="progress" id="analyze-progressbar" role="progressbar" aria-labelledby="analyze-status"
-               aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-            <div id="analyze-progress" class="progress-fill"></div>
-          </div>
-          <p id="analyze-status" class="status-text">파일을 읽는 중…</p>
-          <button id="btn-cancel-analyze" class="btn ghost">분석 취소</button>
+    <div class="app-workspace">
+      <header class="workspace-header">
+        <div>
+          <p class="eyebrow" id="page-eyebrow">비식별 작업</p>
+          <h2 id="page-title">새 비식별 작업</h2>
         </div>
-      </div>
+        <div class="header-trust"><span class="dot"></span>외부 전송 없음</div>
+      </header>
 
-      <!-- 3단계: 검토 -->
-      <div id="screen-review" class="screen">
-        <!-- 검토 화면은 세로 공간이 곧 검토 효율이다.
-             단계 표시·문서 정보·AI 진행을 한 줄에 모은다. -->
-        <div class="review-head">
-          <ol class="steps" aria-label="진행 단계">
-            <li class="step done">문서 선택</li><li class="step done">분석</li><li class="step current" aria-current="step">검토</li><li class="step">결과</li>
+      <main id="main-content">
+        <section id="tab-deidentify" class="tab-panel active" aria-labelledby="tabbtn-deidentify">
+          <ol class="workflow-steps" id="workflow-steps" aria-label="비식별 처리 진행 단계">
+            <li class="step current" data-step="prepare" aria-current="step"><span>1</span><b>문서 준비</b></li>
+            <li class="step" data-step="analyze"><span>2</span><b>자동 분석</b></li>
+            <li class="step" data-step="review"><span>3</span><b>개인정보 검토</b></li>
+            <li class="step" data-step="confirm"><span>4</span><b>처리 확인</b></li>
+            <li class="step" data-step="complete"><span>5</span><b>완료</b></li>
           </ol>
-          <div id="doc-meta" class="doc-meta"></div>
-          <div id="ai-status" class="ai-status" hidden>
-            <div class="ai-status-bar" id="ai-progressbar" role="progressbar"
-                 aria-labelledby="ai-status-text" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-              <div id="ai-progress" class="ai-status-fill"></div>
-            </div>
-            <span id="ai-status-text" class="ai-status-text"></span>
-            <button id="btn-cancel-ai" class="btn tiny ghost">AI 중단</button>
+
+          <div id="screen-main" class="screen active">
+            <section class="start-hero">
+              <div class="start-copy">
+                <p class="eyebrow">새 비식별 작업</p>
+                <h3>문서 속 개인정보를<br />안전하게 찾아 처리합니다.</h3>
+                <p>자동 탐지 결과를 바로 변경하지 않습니다. 후보를 직접 검토한 뒤 결과 문서를 만듭니다.</p>
+                <ul class="trust-list">
+                  <li>원본 파일은 변경되지 않음</li>
+                  <li>모든 처리는 현재 PC에서 수행</li>
+                  <li>AI 없이 규칙 탐지만으로도 사용 가능</li>
+                </ul>
+              </div>
+              <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="문서 선택 또는 끌어놓기">
+                <span class="drop-icon" aria-hidden="true">＋</span>
+                <p class="drop-main">문서를 여기에 놓으세요</p>
+                <p class="drop-sub">또는 클릭해서 컴퓨터에서 선택</p>
+                <span class="file-support">TXT · CSV · XLSX · DOCX · HWPX · PDF · 최대 20MB</span>
+                <input type="file" id="file-input" accept=".txt,.csv,.xlsx,.docx,.hwpx,.pdf" hidden />
+              </div>
+            </section>
+            <details class="support-details">
+              <summary>지원 범위와 자동 탐지 시 주의사항</summary>
+              <div class="support-grid">
+                <p><strong>지원 제외</strong><br />구형 HWP·DOC·XLS, 암호·DRM 문서, 스캔 이미지 PDF</p>
+                <p><strong>검토 필요</strong><br />자동 탐지는 모든 개인정보를 찾지 못할 수 있으므로 최종 검토가 필요합니다.</p>
+                <p><strong>대응표 보안</strong><br />복원용 대응표는 선택한 경우에만 생성하며 결과 문서와 분리 보관해야 합니다.</p>
+              </div>
+            </details>
           </div>
-        </div>
 
-        <div class="chips" id="type-chips" role="group" aria-label="유형별 필터"></div>
+          <div id="screen-analyze" class="screen">
+            <section class="panel analyze-panel">
+              <p class="eyebrow">자동 분석</p>
+              <h3>문서를 분석하고 있습니다</h3>
+              <div id="analyze-file-info" class="file-info"></div>
+              <ol class="analysis-checklist" id="analysis-checklist">
+                <li data-analysis="open"><span class="analysis-icon">●</span> 문서 열기</li>
+                <li data-analysis="extract"><span class="analysis-icon">○</span> 텍스트 추출</li>
+                <li data-analysis="rules"><span class="analysis-icon">○</span> 규칙 기반 개인정보 탐지</li>
+                <li data-analysis="prepare"><span class="analysis-icon">○</span> 검토 화면 준비</li>
+              </ol>
+              <div class="progress sr-only" id="analyze-progressbar" role="progressbar" aria-labelledby="analyze-status" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div id="analyze-progress" class="progress-fill"></div>
+              </div>
+              <p id="analyze-status" class="status-text">파일을 읽는 중…</p>
+              <button id="btn-cancel-analyze" class="btn ghost">분석 취소</button>
+            </section>
+          </div>
 
-        <div id="filter-actions" class="filter-actions" hidden>
-          <span id="filter-label" class="filter-label"></span>
-          <button class="btn tiny" data-bulk="select">모두 선택</button>
-          <button class="btn tiny" data-bulk="deselect">모두 해제</button>
-          <label class="inline-field">처리방식
-            <select id="bulk-action"></select>
-          </label>
-          <button class="btn tiny ghost" data-bulk="clear">필터 해제</button>
-        </div>
-
-        <div class="review-layout">
-          <section class="pane">
-            <header class="pane-head">
-              <h2>문서 미리보기</h2>
-              <div class="pane-actions">
-                <button id="btn-preview-prev" class="btn tiny ghost" hidden>이전 구간</button>
-                <span id="preview-window-info" class="muted" hidden></span>
-                <button id="btn-preview-next" class="btn tiny ghost" hidden>다음 구간</button>
-                <select id="add-type" aria-label="추가할 개인정보 유형"></select>
-                <button id="btn-add-selection" class="btn tiny"
-                        title="미리보기에서 문자열을 드래그한 후 누르십시오">선택 영역 추가</button>
+          <div id="screen-review" class="screen">
+            <header class="review-head">
+              <div id="doc-meta" class="doc-meta"></div>
+              <div id="ai-status" class="ai-status" hidden>
+                <span class="ai-spark" aria-hidden="true">AI</span>
+                <div class="ai-status-bar" id="ai-progressbar" role="progressbar" aria-labelledby="ai-status-text" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="ai-progress" class="ai-status-fill"></div></div>
+                <span id="ai-status-text" class="ai-status-text"></span>
+                <button id="btn-cancel-ai" class="btn tiny ghost">AI 중단</button>
               </div>
             </header>
-            <div id="preview" class="preview-content" tabindex="0"></div>
-          </section>
 
-          <section class="pane">
-            <header class="pane-head">
-              <h2>개인정보 후보 <span id="detect-count-badge" class="count-badge"></span></h2>
-              <div class="pane-actions">
-                <input type="text" id="search-input" placeholder="문자열 검색" aria-label="문자열 검색" />
-                <select id="search-type" aria-label="지정할 유형"></select>
-                <button id="btn-search-add" class="btn tiny">지정</button>
-              </div>
-            </header>
+            <div class="review-layout">
+              <aside class="review-summary" aria-label="검토 현황과 필터">
+                <div>
+                  <p class="eyebrow">검토 현황</p>
+                  <div class="review-score"><strong id="review-done-count">0</strong><span id="review-total-count">/ 0</span></div>
+                  <div class="review-meter" aria-hidden="true"><span id="review-meter-fill"></span></div>
+                </div>
+                <dl class="review-counts">
+                  <div><dt>미확인</dt><dd id="count-pending">0</dd></div>
+                  <div><dt>처리</dt><dd id="count-process">0</dd></div>
+                  <div><dt>제외</dt><dd id="count-exclude">0</dd></div>
+                  <div><dt>AI 발견</dt><dd id="count-ai">0</dd></div>
+                </dl>
+                <div class="filter-block">
+                  <h3>상태</h3>
+                  <div id="status-filters" class="status-filters">
+                    <button class="status-filter active" data-status="all" aria-pressed="true">전체 <span id="filter-count-all">0</span></button>
+                    <button class="status-filter" data-status="pending" aria-pressed="false">확인 필요 <span id="filter-count-pending">0</span></button>
+                    <button class="status-filter" data-status="ai" aria-pressed="false">AI 발견 <span id="filter-count-ai">0</span></button>
+                    <button class="status-filter" data-status="disputed" aria-pressed="false">오탐 의심 <span id="filter-count-disputed">0</span></button>
+                    <button class="status-filter" data-status="exclude" aria-pressed="false">처리 제외 <span id="filter-count-exclude">0</span></button>
+                    <button class="status-filter" data-status="manual" aria-pressed="false">수동 추가 <span id="filter-count-manual">0</span></button>
+                  </div>
+                </div>
+                <label class="field compact-field">개인정보 유형
+                  <select id="type-filter" aria-label="개인정보 유형 필터"></select>
+                </label>
+                <div id="filter-actions" class="filter-actions" hidden>
+                  <span id="filter-label" class="filter-label"></span>
+                  <button class="btn tiny" data-bulk="process">모두 처리</button>
+                  <button class="btn tiny ghost" data-bulk="exclude">모두 제외</button>
+                  <label class="field compact-field">처리방식<select id="bulk-action"></select></label>
+                  <button class="btn tiny tertiary" data-bulk="clear">필터 해제</button>
+                </div>
+              </aside>
 
-            <div class="list-toolbar">
-              <div class="toolbar-left">
-                <button id="btn-select-all" class="btn tiny">전체 선택</button>
-                <button id="btn-deselect-all" class="btn tiny">전체 해제</button>
-                <button id="btn-undo" class="btn tiny ghost">되돌리기</button>
-              </div>
-              <label class="inline-field">정렬
-                <select id="sort-mode" aria-label="정렬 기준">
-                  <option value="risk">검토 필요순</option>
-                  <option value="type">유형별</option>
-                  <option value="position">문서 순서</option>
-                </select>
-              </label>
+              <section class="pane document-pane">
+                <header class="pane-head">
+                  <h3>문서 문맥</h3>
+                  <div class="pane-actions">
+                    <button id="btn-preview-prev" class="btn tiny ghost" hidden>이전</button>
+                    <span id="preview-window-info" class="muted" hidden></span>
+                    <button id="btn-preview-next" class="btn tiny ghost" hidden>다음</button>
+                  </div>
+                </header>
+                <div id="preview" class="preview-content" tabindex="0"></div>
+                <div class="selection-help">문장에서 문자열을 선택하면 개인정보 후보로 직접 추가할 수 있습니다.</div>
+                <div id="selection-popover" class="selection-popover" hidden>
+                  <select id="add-type" aria-label="추가할 개인정보 유형"></select>
+                  <button id="btn-add-selection" class="btn tiny primary">선택 영역 추가</button>
+                </div>
+              </section>
+
+              <section class="pane candidate-pane">
+                <header class="pane-head">
+                  <div><h3>개인정보 후보</h3><span id="detect-count-badge" class="count-badge"></span></div>
+                  <label class="sort-field">정렬<select id="sort-mode" aria-label="정렬 기준"><option value="risk">검토 필요순</option><option value="type">유형별</option><option value="position">문서 순서</option></select></label>
+                </header>
+                <details class="candidate-tools">
+                  <summary>검색·일괄 작업</summary>
+                  <div class="candidate-tools-body">
+                    <input type="text" id="search-input" placeholder="문자열 검색" aria-label="문자열 검색" />
+                    <select id="search-type" aria-label="지정할 유형"></select>
+                    <button id="btn-search-add" class="btn tiny">지정</button>
+                    <button id="btn-select-all" class="btn tiny">전체 처리</button>
+                    <button id="btn-deselect-all" class="btn tiny ghost">전체 제외</button>
+                    <button id="btn-undo" class="btn tiny tertiary">되돌리기</button>
+                  </div>
+                </details>
+                <p class="kbd-hint"><kbd>J</kbd><kbd>K</kbd> 이동 · <kbd>I</kbd> 처리 · <kbd>X</kbd> 제외 · <kbd>Enter</kbd> 상세</p>
+                <div id="candidate-list" class="candidate-list" role="list"></div>
+              </section>
             </div>
 
-            <p class="kbd-hint">
-              <kbd>J</kbd><kbd>K</kbd> 이동 · <kbd>Space</kbd> 선택 · <kbd>1</kbd>~<kbd>4</kbd> 처리방식 · <kbd>Enter</kbd> 상세
-            </p>
-
-            <div id="candidate-list" class="candidate-list" role="list"></div>
-          </section>
-        </div>
-
-        <div id="review-gap" class="alert alert-warn compact" hidden></div>
-
-        <div class="review-footer">
-          <label class="confirm-check">
-            <input type="checkbox" id="final-confirm" />
-            <span>탐지 결과를 검토하였으며 비식별 처리에 동의합니다.
-              <span class="muted">자동 탐지가 모든 개인정보를 찾지 못할 수 있습니다.</span></span>
-          </label>
-          <button id="btn-execute" class="btn primary lg" disabled>비식별 실행</button>
-        </div>
-      </div>
-
-      <!-- 4단계: 결과 -->
-      <div id="screen-result" class="screen">
-        <ol class="steps" aria-label="진행 단계">
-          <li class="step done">문서 선택</li><li class="step done">분석</li><li class="step done">검토</li><li class="step current" aria-current="step">결과</li>
-        </ol>
-
-        <div id="ai-incomplete-warning" class="alert alert-warn" hidden></div>
-        <div id="unprocessed-warning" class="alert alert-warn" hidden></div>
-
-        <div class="panel">
-          <h2>처리 결과</h2>
-          <div id="result-summary" class="result-summary"></div>
-          <div class="download-row">
-            <button id="btn-download-result" class="btn primary">결과 파일 다운로드</button>
-            <button id="btn-download-summary" class="btn">처리결과 요약</button>
-            <button id="btn-download-mapping" class="btn danger-outline">대응표 (민감정보)</button>
+            <div id="review-gap" class="alert alert-warn compact" hidden></div>
+            <div class="review-footer">
+              <p id="review-footer-summary"><strong>0개 처리</strong> · 0개 제외 · 0개 미확인</p>
+              <button id="btn-to-confirm" class="btn primary lg" disabled>처리 확인으로 이동 <span aria-hidden="true">→</span></button>
+            </div>
           </div>
-          <p class="alert alert-warn compact">
-            대응표 파일에는 개인정보 <strong>원문이 평문으로 포함</strong>됩니다.
-            복원이 필요한 경우에만 내려받고, 결과 파일과 분리하여 보관하십시오.
-          </p>
-        </div>
 
-        <div class="panel">
-          <header class="pane-head">
-            <h2>처리 전후 비교</h2>
-            <div class="segmented" role="group" aria-label="비교 보기">
-              <button class="seg-btn active" data-compare="after">처리 후</button>
-              <button class="seg-btn" data-compare="before">처리 전</button>
+          <div id="screen-confirm" class="screen">
+            <section class="confirm-layout">
+              <div>
+                <p class="eyebrow">처리 확인</p>
+                <h3>실행 전 처리 내용을 확인하세요</h3>
+                <p class="muted">처리를 실행하면 원본은 그대로 두고 별도의 결과 파일을 만듭니다.</p>
+                <div id="confirm-ai-warning" class="alert alert-warn" hidden></div>
+                <div class="confirm-stats">
+                  <div><span>처리 대상</span><strong id="confirm-process-count">0</strong></div>
+                  <div><span>처리 제외</span><strong id="confirm-exclude-count">0</strong></div>
+                  <div><span>미확인</span><strong id="confirm-pending-count">0</strong></div>
+                </div>
+                <div class="panel confirm-methods"><h4>처리방식</h4><div id="confirm-action-counts"></div></div>
+              </div>
+              <aside class="panel mapping-choice">
+                <p class="eyebrow">복원 옵션</p>
+                <h4>대응표를 생성하시겠습니까?</h4>
+                <label class="choice-card"><input type="radio" name="mapping-choice" value="no" checked /><span><strong>생성하지 않음</strong><small>권장 · 개인정보 원문 파일을 남기지 않습니다.</small></span></label>
+                <label class="choice-card danger-choice"><input type="radio" name="mapping-choice" value="yes" /><span><strong>복원을 위해 생성</strong><small>대응표에 개인정보 원문이 평문으로 포함됩니다.</small></span></label>
+                <label class="confirm-check"><input type="checkbox" id="final-confirm" /><span>개인정보 후보와 제외 항목을 확인했습니다.</span></label>
+              </aside>
+            </section>
+            <div class="confirm-footer"><button id="btn-back-review" class="btn ghost">검토로 돌아가기</button><button id="btn-execute" class="btn primary lg" disabled>비식별 처리 실행</button></div>
+          </div>
+
+          <div id="screen-result" class="screen">
+            <div id="ai-incomplete-warning" class="alert alert-warn" hidden></div>
+            <div id="unprocessed-warning" class="alert alert-warn" hidden></div>
+            <section class="completion-hero">
+              <span class="completion-icon" aria-hidden="true">✓</span>
+              <div><p class="eyebrow">작업 완료</p><h3>비식별 처리가 완료되었습니다</h3><div id="result-summary" class="result-summary"></div></div>
+              <button id="btn-download-result" class="btn primary lg">결과 문서 다운로드</button>
+            </section>
+            <section class="result-grid">
+              <div class="panel">
+                <header class="pane-head"><h3>변경 내용 확인</h3><div class="segmented" role="group" aria-label="비교 보기"><button class="seg-btn active" data-compare="changes">변경 항목</button><button class="seg-btn" data-compare="after">전체 문서</button><button class="seg-btn" data-compare="before">처리 전</button></div></header>
+                <div id="compare-changes" class="change-list"></div>
+                <div id="compare-after" class="preview-content" hidden></div>
+                <div id="compare-before" class="preview-content" hidden></div>
+              </div>
+              <aside class="panel additional-files"><h3>추가 파일</h3><button id="btn-download-summary" class="btn secondary">처리 내역 보고서</button><button id="btn-download-mapping" class="btn danger-outline" hidden>대응표 다운로드 · 민감정보</button><p id="mapping-result-note" class="muted">대응표를 생성하지 않았습니다.</p></aside>
+            </section>
+            <div class="result-footer"><button id="btn-new-doc" class="btn">새 문서 처리</button><button id="btn-finish" class="btn ghost">작업 데이터 지우고 종료</button></div>
+          </div>
+        </section>
+
+        <section id="tab-restore" class="tab-panel" aria-labelledby="tabbtn-restore">
+          <div class="page-intro"><p class="eyebrow">도구</p><h3>원본 복원</h3><p>비식별 문서와 대응표의 일치 여부를 확인한 뒤 복원 가능한 항목만 되돌립니다.</p></div>
+          <ol class="restore-steps" aria-label="복원 단계"><li class="current">1. 파일 선택</li><li>2. 일치 확인</li><li>3. 복원 실행</li><li>4. 완료</li></ol>
+          <section class="panel restore-panel">
+            <div class="restore-inputs">
+              <label class="file-label">1. 비식별 문서 <span class="muted">TXT / CSV / XLSX / DOCX / HWPX</span><input type="file" id="restore-doc-input" accept=".txt,.csv,.xlsx,.docx,.hwpx" /></label>
+              <label class="file-label">2. 대응표 파일 <span class="muted">JSON · 민감정보</span><input type="file" id="restore-map-input" accept=".json" /></label>
             </div>
-          </header>
-          <div id="compare-after" class="preview-content"></div>
-          <div id="compare-before" class="preview-content" hidden></div>
-        </div>
+            <div id="restore-validation" class="restore-validation muted">두 파일을 선택하면 일치 여부와 복원 가능 항목을 확인합니다.</div>
+            <button id="btn-restore" class="btn primary" disabled>복원 실행</button>
+            <div id="restore-result" class="alert alert-ok" hidden></div>
+          </section>
+        </section>
 
-        <div class="result-footer">
-          <button id="btn-new-doc" class="btn">새 문서 처리</button>
-          <button id="btn-finish" class="btn ghost">작업 종료 (작업정보 초기화)</button>
-        </div>
-      </div>
-    </section>
-
-    <!-- ============ 복원 탭 ============ -->
-    <section id="tab-restore" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-restore">
-      <div class="panel narrow">
-        <h2>원본 복원</h2>
-        <p>비식별 처리된 문서와 함께 저장한 <strong>대응표 파일(JSON)</strong>로 치환값을 원문으로 되돌립니다.</p>
-        <p class="muted">마스킹(<code>*</code>)·삭제 방식으로 처리된 항목과 PDF 결과는 복원할 수 없습니다.</p>
-        <div class="restore-inputs">
-          <label class="file-label">비식별 문서 <span class="muted">(TXT / CSV / XLSX / DOCX / HWPX)</span>
-            <input type="file" id="restore-doc-input" accept=".txt,.csv,.xlsx,.docx,.hwpx" />
-          </label>
-          <label class="file-label">대응표 파일 <span class="muted">(JSON)</span>
-            <input type="file" id="restore-map-input" accept=".json" />
-          </label>
-        </div>
-        <button id="btn-restore" class="btn primary" disabled>복원 실행</button>
-        <div id="restore-result" class="alert alert-ok" hidden></div>
-      </div>
-    </section>
-
-    <!-- ============ 설정 탭 ============ -->
-    <section id="tab-settings" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-settings">
-
-      <div class="panel">
-        <h2>AI 탐지</h2>
-        <p class="muted">이 PC 안의 AI 엔진이 문맥을 판단해 규칙이 놓치는 개인정보를 추가로 찾습니다.
-          AI는 후보를 <strong>추가만</strong> 하며, 사용자가 선택한 처리 대상을 해제하지 않습니다.</p>
-
-        <label class="switch-row">
-          <input type="checkbox" id="ai-enabled" checked />
-          <span>AI 탐지 사용</span>
-        </label>
-
-        <div class="field-grid">
-          <label class="field">엔진 주소
-            <input type="text" id="ai-endpoint" spellcheck="false" />
-          </label>
-          <label class="field">모델
-            <input type="text" id="ai-model" list="ai-model-list" spellcheck="false" />
-            <datalist id="ai-model-list"></datalist>
-          </label>
-        </div>
-
-        <div class="toolbar-group">
-          <button id="btn-ai-test" class="btn small">연결 시험</button>
-          <span id="ai-test-result" class="test-result"></span>
-        </div>
-      </div>
-
-      <div class="panel">
-        <h2>유형별 기본 처리방식</h2>
-        <p class="muted">비식별 실행 시 각 유형에 적용되는 기본값입니다. 후보별로 개별 변경할 수 있습니다.</p>
-        <div id="policy-list" class="policy-list"></div>
-      </div>
-
-      <div class="panel">
-        <h2>사용자 정의 탐지 규칙</h2>
-        <p class="muted">정규표현식으로 규칙을 추가합니다. 예: 사번 <code>EMP-\d{6}</code></p>
-        <div class="toolbar-group">
-          <input type="text" id="rule-name" placeholder="규칙 이름" />
-          <input type="text" id="rule-pattern" placeholder="정규표현식" spellcheck="false" />
-          <button id="btn-add-rule" class="btn small">규칙 추가</button>
-        </div>
-        <ul id="rule-list" class="rule-list"></ul>
-        <div class="settings-footer">
-          <button id="btn-reset-settings" class="btn ghost">설정 초기화</button>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <footer class="app-footer">
-    모든 처리는 사용자 PC에서 수행됩니다 · 이 PC 안의 AI 엔진 외 외부 통신 없음
-  </footer>
+        <section id="tab-settings" class="tab-panel" aria-labelledby="tabbtn-settings">
+          <div class="page-intro"><p class="eyebrow">관리</p><h3>설정</h3><p>업무 정책과 AI 연결, 사용자 탐지 규칙을 관리합니다.</p></div>
+          <div class="settings-layout">
+            <nav class="settings-nav" aria-label="설정 항목"><button class="settings-nav-btn active" data-settings="policy">처리 정책</button><button class="settings-nav-btn" data-settings="ai">AI 엔진</button><button class="settings-nav-btn" data-settings="rules">사용자 규칙</button></nav>
+            <div>
+              <section class="panel settings-panel active" data-settings-panel="policy"><p class="eyebrow">처리 정책</p><h3>유형별 기본 처리방식</h3><p class="muted">후보에서 별도로 바꾸지 않으면 아래 기본값을 적용합니다.</p><div id="policy-list" class="policy-list"></div></section>
+              <section class="panel settings-panel" data-settings-panel="ai"><p class="eyebrow">AI 엔진</p><h3>로컬 AI 연결</h3><label class="switch-row"><input type="checkbox" id="ai-enabled" checked /><span>AI 추가 탐지 사용</span></label><div class="ai-connection-summary"><span class="dot"></span><strong id="settings-ai-state">연결 상태 확인 전</strong></div><details class="advanced-settings"><summary>고급 설정</summary><div class="field-grid"><label class="field">엔진 주소<input type="text" id="ai-endpoint" spellcheck="false" /></label><label class="field">모델<input type="text" id="ai-model" list="ai-model-list" spellcheck="false" /><datalist id="ai-model-list"></datalist></label></div></details><div class="toolbar-group"><button id="btn-ai-test" class="btn small">연결 다시 확인</button><span id="ai-test-result" class="test-result"></span></div></section>
+              <section class="panel settings-panel" data-settings-panel="rules"><p class="eyebrow">사용자 규칙</p><h3>추가 탐지 규칙</h3><p class="muted">정규표현식으로 조직 고유 번호나 코드를 탐지합니다.</p><div class="rule-editor"><label class="field">규칙 이름<input type="text" id="rule-name" placeholder="예: 사번" /></label><label class="field">정규표현식<input type="text" id="rule-pattern" placeholder="예: EMP-\d{6}" spellcheck="false" /></label><button id="btn-add-rule" class="btn small">규칙 추가</button></div><ul id="rule-list" class="rule-list"></ul></section>
+              <div class="settings-footer"><button id="btn-reset-settings" class="btn ghost">모든 설정을 기본값으로 복원</button></div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-
-  <!-- AI 결과는 비동기로 도착한다. 화면을 보지 않는 사용자에게도 알린다. -->
   <div id="live-region" class="sr-only" role="status" aria-live="polite"></div>
-
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

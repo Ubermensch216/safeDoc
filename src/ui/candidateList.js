@@ -6,6 +6,7 @@
 
 import { PII_TYPES, ACTION_LABELS, confidenceLabel, CONFIDENCE_LEVELS } from '../detect/types.js';
 import { escapeHtml } from './dom.js';
+import { REVIEW_STATES, REVIEW_STATE_LABELS } from '../core/reviewState.js';
 
 const METHOD_LABELS = {
   REGEX: '정규식',
@@ -21,11 +22,13 @@ const METHOD_LABELS = {
 // 검토 필요도 — 낮을수록 먼저 보여준다.
 // 사람의 시간은 확실한 항목이 아니라 애매한 항목에 써야 한다.
 export function riskRank(c) {
-  if (c.aiOnly) return 0;          // 규칙이 놓친 것 — AI 도입의 이유
-  if (c.aiDisputed) return 1;      // 오탐 의심
-  if (c.confidence < CONFIDENCE_LEVELS.MEDIUM) return 2;
-  if (!c.aiConfirmed) return 3;
-  return 4;                        // 규칙과 AI가 일치 — 가장 안전
+  const decidedOffset = c.reviewState === REVIEW_STATES.PENDING ? 0
+    : (c.reviewState === REVIEW_STATES.PROCESS ? 10 : 20);
+  if (c.aiOnly) return decidedOffset;          // 규칙이 놓친 것 — AI 도입의 이유
+  if (c.aiDisputed) return decidedOffset + 1;  // 오탐 의심
+  if (c.confidence < CONFIDENCE_LEVELS.MEDIUM) return decidedOffset + 2;
+  if (!c.aiConfirmed) return decidedOffset + 3;
+  return decidedOffset + 4;                    // 규칙과 AI가 일치 — 가장 안전
 }
 
 function comparator(mode) {
@@ -72,7 +75,7 @@ export class CandidateListView {
     this.nodes = new Map();   // id → 카드 엘리먼트
     this.order = [];          // 현재 DOM 순서의 id 배열
     this.sortMode = 'risk';
-    this.filter = { type: null, source: null };
+    this.filter = { type: null, status: 'all' };
     this.policies = {};
     this.cursorId = null;
     this.expanded = new Set();
@@ -86,14 +89,17 @@ export class CandidateListView {
   }
 
   setFilter(filter) {
-    this.filter = { type: null, source: null, ...filter };
+    this.filter = { type: null, status: 'all', ...filter };
   }
 
   isVisible(c) {
-    const { type, source } = this.filter;
+    const { type, status } = this.filter;
     if (type && c.type !== type) return false;
-    if (source === 'ai' && !c.aiOnly) return false;
-    if (source === 'disputed' && !c.aiDisputed) return false;
+    if (status === 'pending' && c.reviewState !== REVIEW_STATES.PENDING) return false;
+    if (status === 'ai' && !c.aiOnly) return false;
+    if (status === 'disputed' && !c.aiDisputed) return false;
+    if (status === 'exclude' && c.reviewState !== REVIEW_STATES.EXCLUDE) return false;
+    if (status === 'manual' && !['MANUAL', 'SEARCH'].includes(c.detectionMethod)) return false;
     return true;
   }
 
@@ -161,14 +167,15 @@ export class CandidateListView {
     const src = sourceOf(c);
     const isOpen = this.expanded.has(c.id);
     const sig = [
-      c.selected, c.type, action, c.originalText, c.confidence,
+      c.selected, c.reviewState, c.type, action, c.originalText, c.context, c.confidence,
       src.cls, src.reason, isOpen, c.id === this.cursorId, c.aiReportedType,
     ].join('');
 
     if (el.dataset.sig === sig) return;
     el.dataset.sig = sig;
 
-    el.className = `cand ${src.cls}${c.selected ? '' : ' excluded'}${c.id === this.cursorId ? ' cursor' : ''}`;
+    const reviewState = c.reviewState || (c.selected ? REVIEW_STATES.PROCESS : REVIEW_STATES.EXCLUDE);
+    el.className = `cand ${src.cls} state-${reviewState.toLowerCase()}${reviewState === REVIEW_STATES.EXCLUDE ? ' excluded' : ''}${c.id === this.cursorId ? ' cursor' : ''}`;
 
     const reasonHtml = src.reason
       ? `<span class="cand-reason" title="${escapeHtml(src.reason)}">${escapeHtml(src.reason)}</span>`
@@ -182,12 +189,12 @@ export class CandidateListView {
       : '';
 
     const typeLabel = PII_TYPES[c.type]?.label || c.type;
-    // 체크박스·처리방식 선택은 화면 없이도 어떤 항목의 것인지 알 수 있어야 한다
+    // 상태 버튼·처리방식 선택은 화면 없이도 어떤 항목의 것인지 알 수 있어야 한다
     const forWhat = `${c.originalText} (${typeLabel})`;
+    const context = c.context || c.originalText;
+    const reviewLabel = REVIEW_STATE_LABELS[reviewState];
 
     el.innerHTML = `
-<input type="checkbox" class="c-check" ${c.selected ? 'checked' : ''}
-       aria-label="${escapeHtml(forWhat)} 처리 대상 선택" />
 <div class="cand-main">
   <div class="cand-line">
     <span class="cand-value" title="${escapeHtml(c.originalText)}">${escapeHtml(c.originalText)}</span>
@@ -196,13 +203,21 @@ export class CandidateListView {
   </div>
   <div class="cand-line cand-meta">${badgeHtml}${reasonHtml}</div>
 </div>
-<select class="c-action cand-action" aria-label="${escapeHtml(forWhat)} 처리방식">${optionsHtml(ACTION_ENTRIES, action)}</select>
+<div class="cand-decisions" role="group" aria-label="${escapeHtml(forWhat)} 검토 결정">
+  <button class="c-decision process" data-state="${REVIEW_STATES.PROCESS}" aria-pressed="${reviewState === REVIEW_STATES.PROCESS}">처리</button>
+  <button class="c-decision exclude" data-state="${REVIEW_STATES.EXCLUDE}" aria-pressed="${reviewState === REVIEW_STATES.EXCLUDE}">제외</button>
+</div>
 <button class="cand-toggle" aria-expanded="${isOpen}"
         aria-label="${escapeHtml(forWhat)} 상세 ${isOpen ? '접기' : '펼치기'}">${isOpen ? '▴' : '▾'}</button>
+<p class="cand-context">“${escapeHtml(context)}”</p>
+<p class="cand-policy">${escapeHtml(typeLabel)} · ${reviewLabel} · 적용 방식: <strong>${escapeHtml(ACTION_LABELS[action])}</strong></p>
 ${isOpen ? `
 <div class="cand-detail">
   <label class="inline-field">유형
     <select class="c-type" aria-label="개인정보 유형">${optionsHtml(TYPE_ENTRIES, c.type)}</select>
+  </label>
+  <label class="inline-field">처리방식
+    <select class="c-action" aria-label="${escapeHtml(forWhat)} 처리방식">${optionsHtml(ACTION_ENTRIES, action)}</select>
   </label>
   <span class="${confClass(c.confidence)}">${confidenceLabel(c.confidence)} ${c.confidence.toFixed(2)}</span>
   <span>${METHOD_LABELS[c.detectionMethod] || c.detectionMethod}</span>

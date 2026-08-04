@@ -6,6 +6,7 @@
 
 import { escapeHtml } from './dom.js';
 import { PII_TYPES, confidenceLabel } from '../detect/types.js';
+import { REVIEW_STATES } from '../core/reviewState.js';
 
 // 화면 응답성 유지 (NFR-104)
 export const PREVIEW_CHAR_LIMIT = 200000;
@@ -14,7 +15,8 @@ const RENDER_DEBOUNCE_MS = 400;
 
 // 강조 색은 유형이 아니라 "검토 필요도"를 나타낸다
 function markClass(c) {
-  if (!c.selected) return 'pii excluded';
+  if (c.reviewState === REVIEW_STATES.PENDING) return 'pii pending';
+  if (c.reviewState === REVIEW_STATES.EXCLUDE || !c.selected) return 'pii excluded';
   if (c.aiDisputed) return 'pii src-disputed';
   if (c.aiOnly) return 'pii src-ai';
   return 'pii';
