@@ -47,6 +47,52 @@ foreach ($c in $candidates) {
 }
 
 Write-Head '문서 확인'
+
+# 배포 패키지에는 index.html 이 포함되어 있다.
+# 개발 저장소를 그대로 복사한 경우에는 dist/ 가 없으므로 즉석에서 빌드할 수 있게 안내한다.
+if (-not $indexPath) {
+    $repoRoot   = $parentDir
+    $pkgJson    = Join-Path $repoRoot 'package.json'
+    $hasRepo    = Test-Path -LiteralPath $pkgJson -PathType Leaf
+    $hasNode    = [bool](Get-Command node -ErrorAction SilentlyContinue)
+
+    if ($hasRepo -and $hasNode) {
+        Write-Warn 'index.html 이 없습니다. 아직 빌드하지 않은 개발 저장소로 보입니다.'
+        Write-Host ''
+        Write-Host "    Node $(node --version) 이(가) 설치되어 있어 지금 빌드할 수 있습니다."
+        Write-Host '    (의존성 내려받기를 위해 인터넷 연결이 필요할 수 있습니다.)'
+        Write-Host ''
+        $answer = Read-Host '  지금 빌드하시겠습니까? [Y/n]'
+        if ([string]::IsNullOrWhiteSpace($answer)) { $answer = 'Y' }   # 그냥 Enter = 빌드
+
+        if ($answer.Trim() -match '^[Yy]') {
+            Push-Location -LiteralPath $repoRoot
+            try {
+                if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'node_modules') -PathType Container)) {
+                    Write-Head '의존성 설치 (npm ci)'
+                    # npm.ps1 은 실행 정책에 막힐 수 있으므로 npm.cmd 를 직접 호출한다.
+                    & npm.cmd ci
+                    if ($LASTEXITCODE -ne 0) { throw "npm ci 실패 (exit $LASTEXITCODE)" }
+                }
+                Write-Head '빌드 (npm run build)'
+                & npm.cmd run build
+                if ($LASTEXITCODE -ne 0) { throw "빌드 실패 (exit $LASTEXITCODE)" }
+            }
+            catch {
+                Write-Bad $_.Exception.Message
+                Write-Host ''
+                Read-Host '  Enter 키를 누르면 종료합니다'
+                exit 1
+            }
+            finally { Pop-Location }
+
+            foreach ($c in $candidates) {
+                if (Test-Path -LiteralPath $c -PathType Leaf) { $indexPath = (Resolve-Path -LiteralPath $c).Path; break }
+            }
+        }
+    }
+}
+
 if (-not $indexPath) {
     Write-Bad 'index.html 을 찾을 수 없습니다.'
     Write-Host ''
@@ -54,6 +100,7 @@ if (-not $indexPath) {
     foreach ($c in $candidates) { Write-Host "      - $c" }
     Write-Host ''
     Write-Host '    개발 저장소에서 실행하는 경우 먼저 빌드하십시오:  npm run build'
+    Write-Host '    배포 패키지를 만들려면 개발 PC에서:               npm run package'
     Write-Host ''
     Read-Host '  Enter 키를 누르면 종료합니다'
     exit 1

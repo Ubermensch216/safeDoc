@@ -3,6 +3,7 @@ node_modules/
 
 # 빌드 산출물 (릴리스 시 별도 첨부)
 dist/
+release/
 
 # 작업용 임시 디렉터리
 tmp/

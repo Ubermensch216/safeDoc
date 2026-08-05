@@ -106,6 +106,18 @@ ollama pull gemma4:e2b
 
 Ollama가 실행 중이면 `start.bat`이 자동으로 감지합니다. 모델이 없거나 Ollama가 꺼져 있으면 규칙 기반으로만 동작합니다.
 
+### 다른 PC에 배포
+
+```bash
+npm run package
+```
+
+빌드 결과와 실행기를 묶어 `release/safeDoc-v<버전>.zip`을 만듭니다. 이 ZIP을 대상 PC에 풀고 `start.bat`을 실행하면 됩니다. **Node.js·npm·인터넷 연결이 필요 없습니다** — 서버는 Windows 기본 구성요소(PowerShell 5.1 + .NET `HttpListener`)만 쓰고 관리자 권한도 요구하지 않습니다.
+
+기존 `dist/`를 그대로 쓰려면 `npm run package -- -SkipBuild`.
+
+저장소를 직접 복사한 경우에는 `dist/`가 `.gitignore` 대상이라 비어 있습니다. 이때 `start.bat`은 Node.js가 설치돼 있으면 그 자리에서 빌드할지 물어봅니다.
+
 폐쇄망 배포 절차는 [deploy/README.txt](deploy/README.txt)를 참고하십시오.
 
 ## npm 스크립트
@@ -120,6 +132,7 @@ Ollama가 실행 중이면 `start.bat`이 자동으로 감지합니다. 모델�
 | `npm run eval:ai` | 규칙 vs 규칙+AI 비교 (Ollama 필요) |
 | `npm run testdocs` | 평가용 합성 시험 문서 생성 |
 | `npm run serve` | `deploy/serve.ps1`로 빌드 결과 제공 |
+| `npm run package` | 배포용 ZIP 생성(`release/`) |
 
 > Windows PowerShell에서 실행 정책 문제로 `npm`이 막힐 경우 `npm.cmd`를 사용하십시오.
 

@@ -12,7 +12,8 @@
     "eval": "node scripts/eval.mjs",
     "testdocs": "node scripts/createAiTestDocuments.mjs",
     "eval:ai": "node scripts/eval.mjs --ai",
-    "serve": "powershell -NoProfile -ExecutionPolicy Bypass -File deploy/serve.ps1"
+    "serve": "powershell -NoProfile -ExecutionPolicy Bypass -File deploy/serve.ps1",
+    "package": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1"
   },
   "devDependencies": {
     "subset-font": "^2.5.0",
