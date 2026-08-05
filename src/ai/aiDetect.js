@@ -35,6 +35,7 @@ export function createAiStats(text, {
     confirmedCount: 0,
     disputedCount: 0,
     rejectedHallucinations: 0,
+    skippedCommonValues: 0,
     failedChunks: 0,
     failedVerifications: 0,
     truncated: chunkCount > maxChunks,
@@ -128,8 +129,9 @@ export async function runAiDetection(parsed, candidates, {
       }
     }
 
-    const { candidates: verified, rejected } = verifyItems(items, chunk);
+    const { candidates: verified, rejected, skippedCommon } = verifyItems(items, chunk);
     stats.rejectedHallucinations += rejected;
+    stats.skippedCommonValues += skippedCommon;
 
     const merged = mergeAiResults(candidates, verified, disputed, {
       text: parsed.text,

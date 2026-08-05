@@ -22,6 +22,7 @@ export function buildAiAudit(aiStats) {
     confirmedCount: aiStats.confirmedCount,
     disputedCount: aiStats.disputedCount,
     rejectedHallucinations: aiStats.rejectedHallucinations,
+    skippedCommonValues: aiStats.skippedCommonValues || 0,
     failedChunks: aiStats.failedChunks,
     failedVerifications: aiStats.failedVerifications,
     truncated: aiStats.truncated,

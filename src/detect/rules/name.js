@@ -17,6 +17,17 @@ const FIELD_NAME_PATTERN = new RegExp(
   'g',
 );
 
+// 필드명과 값 사이에 조사가 낀 문장형: "예금주는 최다은이다" (ANALYSIS 2.4)
+// 위 패턴은 콜론·공백만 허용하므로 조사가 끼면 매칭되지 않아 탐지 0건이었다.
+// 값에 서술어 어미("이다"·"입니다" 등)가 붙어 나오므로 캡처 후 어미를 떼어낸다.
+const FIELD_PARTICLE_PATTERN = new RegExp(
+  `(${NAME_FIELD_KEYWORDS.join('|')})(?:은|는|이|가)[ \\t]+([가-힣]{2,7})(?![가-힣])`,
+  'g',
+);
+
+// 이름 뒤에 붙는 서술어 어미 ("최다은이다" → "최다은")
+const PREDICATE_SUFFIX = /(입니다|이었다|이었고|이었으며|이라고|이라는|이다|이고|이며|였다|라고)$/;
+
 // 이름 뒤에 붙은 조사 분리 (ANALYSIS.md 2.1)
 //
 // 조사를 무조건 떼면 조사와 같은 음절로 끝나는 이름이 잘린다.
@@ -91,6 +102,27 @@ export function detectName(text, { otherPiiRanges = [] } = {}) {
 
   // 동사·어미형 단어 제외 ("연락하여", "안내하고" 등)
   const VERB_SUFFIX = /(하여|하고|하는|하니|하면|하며|했다|한다|합니다|되어|된다|됩니다|하기|하지)$/;
+
+  // 1-b) 필드명+조사 문장형 — 성씨 시작을 요구해 일반명사 오탐을 줄인다
+  for (const m of text.matchAll(FIELD_PARTICLE_PATTERN)) {
+    const stripped = m[2].replace(PREDICATE_SUFFIX, '');
+    if (stripped.length < 2 || VERB_SUFFIX.test(m[2])) continue;
+    const variants = nameVariants(stripped);
+    const base = variants[variants.length - 1];
+    if (base.length < 2 || base.length > 4) continue;
+    if (!startsWithSurname(base)) continue;
+    if (NAME_STOPWORDS.has(base)) continue;
+    if (NAME_FIELD_KEYWORDS.includes(base) || ALL_FIELD_KEYWORDS.has(base)) continue;
+    if (isOrgWord(base)) continue;
+    const start = m.index + m[0].length - m[2].length;
+    for (const word of variants) {
+      const end = start + word.length;
+      const key = `${start}:${end}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push(makeCandidate({ text, start, end, type: 'PERSON_NAME', baseScore: 0.6, detectionMethod: 'CONTEXT' }));
+    }
+  }
 
   // 2) 성씨 사전 기반 탐지 — 조사가 붙은 형태("홍길동에게")도 분리하여 인식
   const wordCount = new Map(); // 반복 출현 점수용

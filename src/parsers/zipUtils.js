@@ -219,9 +219,18 @@ export function joinSegments(files) {
 // 여러 세그먼트에 걸친 후보는 시작 세그먼트에 치환값을 넣고 나머지 구간은 삭제
 export function applyToSegments(files, applied) {
   const sorted = applied.slice().sort((a, b) => a.start - b.start);
+  // 세그먼트와 적용 목록이 모두 시작위치 오름차순이므로 포인터 전진으로 대조한다.
+  // 이전에는 세그먼트마다 전체 적용 목록을 filter로 훑어 O(세그먼트수×적용건수)였다 (ANALYSIS 3.2-3).
+  // 여러 세그먼트에 걸친 적용 건이 있으므로, 포인터는 "끝이 현재 세그먼트 시작보다
+  // 앞인 건"만 지나친다 — 걸침 건은 다음 세그먼트에서도 검사 대상으로 남는다.
+  let cursor = 0;
   for (const file of files) {
     for (const seg of file.segments) {
-      const overlapping = sorted.filter((c) => c.start < seg.globalEnd && seg.globalStart < c.end);
+      while (cursor < sorted.length && sorted[cursor].end <= seg.globalStart) cursor += 1;
+      const overlapping = [];
+      for (let j = cursor; j < sorted.length && sorted[j].start < seg.globalEnd; j++) {
+        if (sorted[j].end > seg.globalStart) overlapping.push(sorted[j]);
+      }
       if (overlapping.length === 0) {
         seg.newText = seg.text;
         continue;

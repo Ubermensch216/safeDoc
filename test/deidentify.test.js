@@ -41,7 +41,7 @@ describe('치환 처리 (FR-501, FR-505)', () => {
     expect(session.getReplacement('PERSON_NAME', '김철수')).toBe('[성명_001]');
   });
 
-  it('텍스트 적용: 뒤→앞 치환으로 위치가 유지된다', () => {
+  it('텍스트 적용: 조각 누적 치환으로 위치가 유지된다', () => {
     resetIdCounter();
     const session = new WorkSession();
     const text = '성명: 홍길동, 연락처: 010-1234-5678\n담당자 홍길동에게 전달';
@@ -53,6 +53,49 @@ describe('치환 처리 (FR-501, FR-505)', () => {
     const nameTokens = after.match(/\[성명_\d{3}\]/g) || [];
     expect(new Set(nameTokens).size).toBe(1);
     expect(nameTokens.length).toBe(2);
+  });
+});
+
+describe('복원 토큰 충돌 방어 (ANALYSIS.md 2.10)', () => {
+  // 원문에 "[성명_001]" 같은 토큰 형태 문자열이 이미 있으면,
+  // 새로 만드는 토큰과 구분되지 않아 복원 시 잘못된 치환이 일어난다.
+  it('원문에 토큰 형태가 있으면 다른 접두사로 치환한다', () => {
+    resetIdCounter();
+    const session = new WorkSession();
+    for (const type of Object.keys(session.typePolicies)) session.typePolicies[type] = 'REPLACE';
+    const text = '기존 문구 [성명_001] 유지\n성명: 홍길동';
+    session.candidates = detectAll(text);
+    const { text: after } = applyToText(text, session.candidates, session);
+    // 원문의 [성명_001]은 그대로 남고, 새 토큰은 다른 형태여야 한다
+    expect(after).toContain('기존 문구 [성명_001] 유지');
+    expect(after).not.toContain('홍길동');
+    const newToken = session.mapping.get('PERSON_NAME 홍길동');
+    expect(newToken).not.toBe('[성명_001]');
+    expect(text).not.toContain(newToken);
+  });
+
+  it('충돌 문서에서도 복원이 원문을 정확히 되돌린다', () => {
+    resetIdCounter();
+    const session = new WorkSession();
+    for (const type of Object.keys(session.typePolicies)) session.typePolicies[type] = 'REPLACE';
+    const text = '참고 [성명_001] 표기\n담당자: 김철수 연락처: 010-1234-5678';
+    session.candidates = detectAll(text);
+    const { text: after, applied } = applyToText(text, session.candidates, session);
+    const table = buildMappingTable('원본.txt', '결과.txt', applied);
+    // 이름공간 토큰([성명#a1_001])도 복원 가능으로 인식되어야 한다
+    expect(table.mappings.every((m) => m.reversible)).toBe(true);
+    const { text: restored } = restoreText(after, table);
+    expect(restored).toBe(text);
+  });
+
+  it('충돌이 없으면 기본 토큰 형태를 유지한다', () => {
+    resetIdCounter();
+    const session = new WorkSession();
+    for (const type of Object.keys(session.typePolicies)) session.typePolicies[type] = 'REPLACE';
+    const text = '성명: 홍길동';
+    session.candidates = detectAll(text);
+    const { text: after } = applyToText(text, session.candidates, session);
+    expect(after).toBe('성명: [성명_001]');
   });
 });
 

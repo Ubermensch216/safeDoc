@@ -101,6 +101,9 @@ function priorityKey(c) {
   return [userRule, structuredValid, c.end - c.start, c.baseScore];
 }
 
+// 우선순위 순으로 훑으며, 이미 수락된 구간과 겹치는 후보를 버린다.
+// 겹침 검사는 시작위치 정렬 배열에 이진 탐색 삽입으로 수행한다 (ANALYSIS 3.2-1)
+// — 이전에는 후보마다 수락 목록 전체를 훑어(accepted.some) O(n²)였다.
 export function resolveOverlaps(candidates) {
   const sorted = candidates.slice().sort((a, b) => {
     const ka = priorityKey(a);
@@ -111,10 +114,23 @@ export function resolveOverlaps(candidates) {
     return a.start - b.start;
   });
 
-  const accepted = [];
+  const accepted = []; // 시작위치 오름차순 유지
   for (const c of sorted) {
-    const overlaps = accepted.some((a) => c.start < a.end && a.start < c.end);
-    if (!overlaps) accepted.push(c);
+    // c.start 이상이 처음 나오는 위치를 이진 탐색
+    let lo = 0;
+    let hi = accepted.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (accepted[mid].start < c.start) lo = mid + 1;
+      else hi = mid;
+    }
+    // 겹칠 수 있는 이웃은 양옆 두 구간뿐이다:
+    // 앞 구간(start < c.start)이 c까지 뻗었거나, 뒤 구간이 c.end 앞에서 시작하는 경우
+    const prev = accepted[lo - 1];
+    const next = accepted[lo];
+    if (prev && c.start < prev.end) continue;
+    if (next && next.start < c.end) continue;
+    accepted.splice(lo, 0, c);
   }
-  return accepted.sort((a, b) => a.start - b.start);
+  return accepted;
 }

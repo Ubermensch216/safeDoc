@@ -51,12 +51,26 @@ describe('AI 응답 검증 — 오프셋 복원', () => {
   });
 
   it('locateAll은 겹치지 않게 전진한다', () => {
-    expect(locateAll('가가가가', 0, '가가')).toHaveLength(2);
+    const r = locateAll('가가가가', 0, '가가');
+    expect(r.positions).toHaveLength(2);
+    expect(r.overflow).toBe(false);
   });
 
-  it('지나치게 많이 출현하는 값은 흔한 단어로 보고 폐기한다', () => {
-    const many = { text: '가나'.repeat(200), base: 0 };
-    expect(locateAll(many.text, 0, '가나')).toHaveLength(0);
+  // ANALYSIS 2.9: 출현 상한 초과를 "환각"으로 집계하면 감사 기록이 사실과 달라진다.
+  // 명단·대장에서 같은 이름이 51번 나오는 것은 환각이 아니라 흔한 값이다.
+  it('출현 상한 초과는 환각이 아니라 초과(overflow)로 구분한다', () => {
+    const many = { text: '가나 '.repeat(200), base: 0 };
+    const r = locateAll(many.text, 0, '가나');
+    expect(r.positions).toHaveLength(0);
+    expect(r.overflow).toBe(true);
+  });
+
+  it('출현 상한 초과 값은 환각 건수가 아니라 별도 건수로 기록된다', () => {
+    const many = { text: '홍길동 '.repeat(60), base: 0 };
+    const r = verifyItems([{ value: '홍길동', type: 'PERSON_NAME', reason: 'x' }], many);
+    expect(r.candidates).toHaveLength(0);
+    expect(r.rejected).toBe(0); // 환각 아님
+    expect(r.skippedCommon).toBe(1); // 규칙 탐지가 잡아주는 흔한 값으로 분류
   });
 });
 

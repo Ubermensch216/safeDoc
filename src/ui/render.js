@@ -93,7 +93,8 @@ export function renderSummaryHtml(summary) {
     aiHtml = `<p class="muted">AI 탐지: ${escapeHtml(ai.model)} · 추가 발견 <strong>${ai.addedCount}</strong>건 · `
       + `규칙과 일치 ${ai.confirmedCount}건 · 오탐 의심 표시 ${ai.disputedCount}건 · `
       + `${ai.chunksCompleted}/${ai.chunksPlanned}구간 · ${(ai.elapsedMs / 1000).toFixed(1)}초`
-      + `${ai.rejectedHallucinations > 0 ? ` · 검증 실패 폐기 ${ai.rejectedHallucinations}건` : ''}</p>`;
+      + `${ai.rejectedHallucinations > 0 ? ` · 검증 실패 폐기 ${ai.rejectedHallucinations}건` : ''}`
+      + `${ai.skippedCommonValues > 0 ? ` · 고빈도 값 제외 ${ai.skippedCommonValues}건(규칙 탐지가 처리)` : ''}</p>`;
   } else {
     aiHtml = '<p class="muted">AI 탐지: 사용하지 않음 (규칙 기반으로만 처리)</p>';
   }

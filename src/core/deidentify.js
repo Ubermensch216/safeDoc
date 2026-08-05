@@ -91,22 +91,34 @@ export function computeReplacement(candidate, session) {
   }
 }
 
-// 텍스트에 후보 목록 적용 — 문서 뒤쪽부터 앞쪽으로 치환하여 위치 변형 방지 (기술명세서 Ⅶ-4)
+// 텍스트에 후보 목록 적용 (기술명세서 Ⅶ-4)
 // candidates: 동일 documentPart 내 선택된 후보만 전달
+//
+// 조각 누적 후 join 방식 (ANALYSIS 3.2-2)
+// 이전에는 후보마다 문서 전체 문자열을 복사해(slice+연결) O(후보수×문서길이)였다.
+// 8,000행/32,000후보 실측 6.2초 → 조각 누적으로 문서 1회 통과 O(문서길이)가 된다.
+// 앞→뒤 순서로 진행하므로 치환 일련번호도 문서 등장 순서를 따른다.
 export function applyToText(text, candidates, session) {
+  // 원문에 토큰 형태가 이미 있으면 다른 이름공간을 쓴다 (ANALYSIS 2.10)
+  session.ensureTokenNamespace?.(text);
+
   const applied = [];
   const sorted = candidates
     .filter((c) => c.selected)
     .slice()
-    .sort((a, b) => b.start - a.start);
+    .sort((a, b) => a.start - b.start);
 
-  let result = text;
+  const parts = [];
+  let pos = 0;
   for (const c of sorted) {
-    // 중첩 처리 방지 (FR-508): 위치의 원문이 일치하는지 확인
-    if (result.slice(c.start, c.end) !== c.originalText) continue;
+    // 중첩 처리 방지 (FR-508): 앞선 치환과 겹치거나 위치의 원문이 다르면 건너뜀
+    if (c.start < pos) continue;
+    if (text.slice(c.start, c.end) !== c.originalText) continue;
     const replacement = computeReplacement(c, session);
-    result = result.slice(0, c.start) + replacement + result.slice(c.end);
+    parts.push(text.slice(pos, c.start), replacement);
+    pos = c.end;
     applied.push({ ...c, replacementText: replacement });
   }
-  return { text: result, applied: applied.reverse() };
+  parts.push(text.slice(pos));
+  return { text: parts.join(''), applied };
 }

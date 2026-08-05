@@ -21,22 +21,32 @@ function sanitizeReason(reason) {
 
 // 청크 안에서 값이 나타나는 모든 위치를 전역 오프셋으로 반환
 // "홍길동"이 5번 나오면 5곳 모두 개인정보이므로 전부 후보로 만든다.
+//
+// 출현 상한 초과는 환각과 구분한다 (ANALYSIS 2.9).
+// 명단·대장 문서에서 같은 이름이 51번 나오는 것은 환각이 아니라 흔한 값이며,
+// 규칙 탐지가 별도로 잡아준다. 이전에는 빈 배열을 돌려줘 호출부가 환각으로
+// 집계했고, 감사 기록이 사실과 달라졌다.
 export function locateAll(chunkText, base, value) {
   const positions = [];
   let idx = chunkText.indexOf(value);
   while (idx >= 0) {
     positions.push({ start: base + idx, end: base + idx + value.length });
-    if (positions.length > MAX_OCCURRENCES) return [];
+    if (positions.length > MAX_OCCURRENCES) {
+      return { positions: [], overflow: true };
+    }
     idx = chunkText.indexOf(value, idx + value.length);
   }
-  return positions;
+  return { positions, overflow: false };
 }
 
 // 모델 응답 items → 후보 원시 형태 [{ start, end, originalText, type, aiReason }]
-// 반환: { candidates, rejected } — rejected는 환각으로 폐기한 건수(감사 기록용)
+// 반환: { candidates, rejected, skippedCommon }
+//   rejected      환각(문서에 없는 값)으로 폐기한 건수 — 감사 기록용
+//   skippedCommon 출현 상한 초과로 건너뛴 건수 — 환각이 아니므로 분리 집계 (ANALYSIS 2.9)
 export function verifyItems(items, chunk) {
   const candidates = [];
   let rejected = 0;
+  let skippedCommon = 0;
 
   for (const item of items) {
     const value = typeof item?.value === 'string' ? item.value : '';
@@ -48,7 +58,12 @@ export function verifyItems(items, chunk) {
     // 유효한 유형 코드인지 확인 (스키마가 강제하지만 방어)
     const type = PII_TYPES[item?.type] ? item.type : 'CUSTOM';
 
-    const positions = locateAll(chunk.text, chunk.base, value);
+    const { positions, overflow } = locateAll(chunk.text, chunk.base, value);
+    if (overflow) {
+      // 흔한 값 — 규칙 탐지가 잡아준다. 환각 건수와 섞지 않는다.
+      skippedCommon += 1;
+      continue;
+    }
     if (positions.length === 0) {
       // 문서에 없는 값 = 환각. 폐기하고 기록한다.
       rejected += 1;
@@ -67,7 +82,7 @@ export function verifyItems(items, chunk) {
     }
   }
 
-  return { candidates, rejected };
+  return { candidates, rejected, skippedCommon };
 }
 
 // 검증 응답(judgements) → 오탐 의심 목록

@@ -53,6 +53,33 @@ describe('조사와 같은 음절로 끝나는 이름 (ANALYSIS.md 2.1)', () => 
   });
 });
 
+describe('필드명 뒤에 조사가 오는 경우 (ANALYSIS.md 2.4)', () => {
+  // "예금주는 최다은이다" — 필드명 키워드와 값 사이에 조사가 끼면
+  // 기존 필드명 패턴(콜론·공백만 허용)이 매칭되지 않아 탐지 0건이었다.
+  it('필드명+조사 뒤의 이름을 탐지한다', () => {
+    expect(names('예금주는 최다은이다')).toContain('최다은');
+    expect(names('신청인은 박서준이고 연락처는 없다')).toContain('박서준');
+    expect(names('담당자가 이도현입니다')).toContain('이도현');
+    expect(names('작성자는 한지우이며 검토를 마쳤다')).toContain('한지우');
+  });
+
+  it('서술어 어미는 이름에 포함하지 않는다', () => {
+    const found = names('예금주는 최다은이다');
+    expect(found).not.toContain('최다은이다');
+    expect(found).not.toContain('최다은이');
+  });
+
+  it('결과 문서에서 이름이 온전히 가려진다', () => {
+    expect(deidentify('예금주는 최다은이다')).toBe('예금주는 [성명_001]이다');
+  });
+
+  it('필드명+조사 뒤의 일반명사는 이름이 아니다', () => {
+    expect(names('이름은 기재하지 않는다')).toHaveLength(0);
+    expect(names('담당자는 부재중입니다')).toHaveLength(0);
+    expect(names('성명은 공란으로 둔다')).toHaveLength(0);
+  });
+});
+
 describe('진짜 조사는 계속 분리한다', () => {
   it('여러 음절 조사는 이름에서 떼어낸다', () => {
     expect(deidentify('홍길동에게 전달')).toBe('[성명_001]에게 전달');
