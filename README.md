@@ -2,7 +2,7 @@
 
 문서 속 개인정보를 브라우저 안에서 탐지·비식별 처리하는 개인 PC용 프로그램입니다. 모든 처리는 클라이언트에서 이루어지며, 외부 서버로 어떤 데이터도 전송하지 않습니다.
 
-버전 1.0.0 · 단위시험 168개 통과 · 단일 HTML 빌드 약 4.3MB(gzip 약 1.99MB)
+버전 1.0.0 · 단위시험 180개 통과 · 단일 HTML 빌드 약 4.3MB(gzip 약 1.99MB)
 
 ## 주요 특징
 
@@ -47,8 +47,8 @@
 
 | | 재현율 | 정밀도 | F1 |
 | --- | --- | --- | --- |
-| 규칙 단독 | 90.2% | 83.2% | 86.6% |
-| 규칙 + AI | 100.0% | 83.6% | 91.1% |
+| 규칙 단독 | 90.2% | 89.6% | 89.9% |
+| 규칙 + AI | 100.0% | 87.7% | 93.5% |
 
 > 평가 세트가 합성 데이터 32건이므로 이 수치는 운영 환경 성능을 보장하지 않습니다. 재현율 100%는 이 세트에 한한 수치입니다. 자세한 한계는 [DEVELOPMENT_STATUS.md](DEVELOPMENT_STATUS.md)를 참고하십시오.
 
@@ -127,7 +127,7 @@ npm run package
 | `npm run dev` | Vite 개발 서버 |
 | `npm run build` | 단일 HTML 프로덕션 빌드 |
 | `npm run preview` | 빌드 결과 미리보기 |
-| `npm test` | 단위시험(Vitest) 168개 |
+| `npm test` | 단위시험(Vitest) 180개 |
 | `npm run eval` | 규칙 단독 탐지 정확도 측정 (AI 불필요) |
 | `npm run eval:ai` | 규칙 vs 규칙+AI 비교 (Ollama 필요) |
 | `npm run testdocs` | 평가용 합성 시험 문서 생성 |
@@ -152,7 +152,7 @@ src/
 ├── ui/                # DOM 렌더링, 후보 목록, 하이라이트
 └── assets/            # 토큰 글꼴 등 자원
 
-test/                  # 단위시험 18파일 168개, 평가 세트(fixtures/eval), 브라우저 하네스
+test/                  # 단위시험 19파일 180개, 평가 세트(fixtures/eval), 브라우저 하네스
 scripts/               # 시험 문서 생성, 정확도 평가, 글꼴 생성, 개발 서버, 배포 패키징(package.ps1)
 deploy/                # 폐쇄망 배포용 실행기(start.bat, serve.ps1, README.txt)
 release/               # npm run package 산출물(ZIP) — 저장소에 포함하지 않음

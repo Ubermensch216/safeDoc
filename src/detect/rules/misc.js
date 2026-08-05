@@ -43,8 +43,12 @@ export function detectBusinessNo(text) {
     if (!v.valid) continue;
     const start = m.index;
     const end = start + m[0].length;
-    let score = 0.5 + 0.35;
-    score += fieldKeywordScore(text, start, 'BUSINESS_NO');
+    const fieldScore = fieldKeywordScore(text, start, 'BUSINESS_NO');
+    // 체크섬 실패 시 필드명 문맥이 있을 때만 낮은 신뢰도 후보로 유지 (ANALYSIS 2.2)
+    // — 문맥까지 없으면 일반 하이픈 숫자열과 구분할 수 없어 오탐이 된다.
+    if (!v.checksumOk && fieldScore === 0) continue;
+    let score = v.checksumOk ? 0.5 + 0.35 : 0.45;
+    score += fieldScore;
     score -= digitBoundaryPenalty(text, start, end);
     results.push(makeCandidate({ text, start, end, type: 'BUSINESS_NO', baseScore: Math.min(score, 1), detectionMethod: 'REGEX' }));
   }

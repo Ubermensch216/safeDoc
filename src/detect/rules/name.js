@@ -2,7 +2,7 @@
 
 import {
   KOREAN_SURNAMES, KOREAN_SURNAMES_2CHAR, NAME_FIELD_KEYWORDS, NAME_TITLES, NAME_STOPWORDS,
-  FIELD_KEYWORDS_BY_TYPE,
+  FIELD_KEYWORDS_BY_TYPE, BANK_NAMES,
 } from '../dictionaries.js';
 
 // 모든 유형의 필드명 키워드("차량번호", "전화번호" 등)는 성명 후보에서 제외
@@ -43,6 +43,16 @@ function nameVariants(word) {
   return [word];
 }
 
+// 기관명·복합어 배제 (ANALYSIS 2.5)
+// "국민은행"·"한국전력공사"처럼 성씨로 시작하는 기관명이 성명으로 오탐됐다.
+// 오탐이 많으면 사용자가 전체 선택 해제를 눌러 진짜 개인정보까지 놓치므로
+// (검토 피로도), 기관 접미사로 끝나는 단어와 은행명은 사전에서 배제한다.
+const ORG_SUFFIX = /(은행|공사|공단|공고|센터|지점|본점|금고|협회|재단|법인|부서|번호)$/;
+const BANK_NAME_SET = new Set(BANK_NAMES);
+function isOrgWord(word) {
+  return BANK_NAME_SET.has(word) || (word.length >= 3 && ORG_SUFFIX.test(word));
+}
+
 // 한글 2~5글자 단어 (성씨 사전 확인용)
 const HANGUL_WORD = /[가-힣]{2,5}/g;
 
@@ -66,6 +76,7 @@ export function detectName(text, { otherPiiRanges = [] } = {}) {
     const base = variants[variants.length - 1];
     if (NAME_STOPWORDS.has(base)) continue;
     if (NAME_FIELD_KEYWORDS.includes(base) || ALL_FIELD_KEYWORDS.has(base)) continue; // 필드명 자체는 성명이 아님
+    if (isOrgWord(base)) continue; // 기관명은 성명이 아님 (ANALYSIS 2.5)
     const start = m.index + m[0].length - m[2].length;
     let score = 0.55 + 0.15;
     if (startsWithSurname(base)) score += 0.2;
@@ -100,6 +111,8 @@ export function detectName(text, { otherPiiRanges = [] } = {}) {
     if (NAME_TITLES.includes(base)) continue;
     // 필드명 키워드 자체는 성명이 아님 ("차량번호" 등)
     if (ALL_FIELD_KEYWORDS.has(base) || ALL_FIELD_KEYWORDS.has(raw)) continue;
+    // 기관명·은행명은 성명이 아님 (ANALYSIS 2.5)
+    if (isOrgWord(base) || isOrgWord(raw)) continue;
     candidates.push({ base, variants, start: m.index });
     wordCount.set(base, (wordCount.get(base) || 0) + 1);
   }

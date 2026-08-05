@@ -57,6 +57,9 @@ export function validateLuhn(digits) {
 }
 
 // 사업자등록번호 검증번호
+// 체크섬 실패 시에도 후보를 버리지 않고 낮은 점수로 유지한다 (기술명세서 Ⅴ-4).
+// RRN·카드번호와 같은 정책이다 — 이전에는 여기만 폐기해서 필드명이 바로 앞에
+// 있는데도 계좌번호로 오분류되거나 완전 누락됐다 (ANALYSIS 2.2).
 export function validateBusinessNo(digits10) {
   if (!/^\d{10}$/.test(digits10)) return { valid: false, score: 0 };
   const weights = [1, 3, 7, 1, 3, 7, 1, 3, 5];
@@ -65,7 +68,7 @@ export function validateBusinessNo(digits10) {
   sum += Math.floor((Number(digits10[8]) * 5) / 10);
   const check = (10 - (sum % 10)) % 10;
   const ok = check === Number(digits10[9]);
-  return { valid: ok, score: ok ? 1.0 : 0 };
+  return { valid: true, score: ok ? 1.0 : 0.5, checksumOk: ok };
 }
 
 // 생년월일 날짜 유효성
