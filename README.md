@@ -2,7 +2,7 @@
 
 문서 속 개인정보를 브라우저 안에서 탐지·비식별 처리하는 개인 PC용 프로그램입니다. 모든 처리는 클라이언트에서 이루어지며, 외부 서버로 어떤 데이터도 전송하지 않습니다.
 
-버전 1.0.0 · 단위시험 142개 통과 · 단일 HTML 빌드 약 3.16MB
+버전 1.0.0 · 단위시험 151개 통과 · 단일 HTML 빌드 약 4.3MB(gzip 약 1.99MB)
 
 ## 주요 특징
 
@@ -127,7 +127,7 @@ npm run package
 | `npm run dev` | Vite 개발 서버 |
 | `npm run build` | 단일 HTML 프로덕션 빌드 |
 | `npm run preview` | 빌드 결과 미리보기 |
-| `npm test` | 단위시험(Vitest) 142개 |
+| `npm test` | 단위시험(Vitest) 151개 |
 | `npm run eval` | 규칙 단독 탐지 정확도 측정 (AI 불필요) |
 | `npm run eval:ai` | 규칙 vs 규칙+AI 비교 (Ollama 필요) |
 | `npm run testdocs` | 평가용 합성 시험 문서 생성 |
@@ -152,9 +152,10 @@ src/
 ├── ui/                # DOM 렌더링, 후보 목록, 하이라이트
 └── assets/            # 토큰 글꼴 등 자원
 
-test/                  # 단위시험, 평가 세트(fixtures/eval), 브라우저 하네스
-scripts/               # 시험 문서 생성, 정확도 평가, 글꼴 생성, 개발 서버
+test/                  # 단위시험 17파일 151개, 평가 세트(fixtures/eval), 브라우저 하네스
+scripts/               # 시험 문서 생성, 정확도 평가, 글꼴 생성, 개발 서버, 배포 패키징(package.ps1)
 deploy/                # 폐쇄망 배포용 실행기(start.bat, serve.ps1, README.txt)
+release/               # npm run package 산출물(ZIP) — 저장소에 포함하지 않음
 doc/                   # 요구사항 정의서·기술명세서(PDF)
 .github/workflows/     # GitHub Pages 배포(단위시험·의존성 감사 게이트 포함)
 ```

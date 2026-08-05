@@ -1,13 +1,13 @@
 # safeDoc 개발 상태 및 재개 지점
 
-작성 기준: 2026-08-01 · 최종 검증: 2026-08-04 (시험 151개 통과, 빌드 성공)
+작성 기준: 2026-08-01 · 최종 검증: 2026-08-05 (시험 17파일 151개 통과, 빌드 성공, 배포 패키지 실행 확인)
 
 ## 현재 상태
 
 - TXT, CSV, XLSX, DOCX, HWPX, 텍스트 PDF 파서와 탐지·검토·비식별 처리가 구현되어 있다.
 - **로컬 LLM(Ollama + `gemma4:e2b`) 기반 AI 탐지 계층을 추가했다.** 규칙이 놓치는 문맥 의존 개인정보(성명·주소)를 보완한다.
 - 단위시험 **151개**가 모두 통과한다.
-- 단일 HTML 프로덕션 빌드가 성공한다. (3,192KB / gzip 1,173KB)
+- 단일 HTML 프로덕션 빌드가 성공한다. (4,296KB / gzip 1,990KB)
 - 작업 중심 좌측 내비게이션과 문서 준비→자동 분석→개인정보 검토→처리 확인→완료의 5단계 UI를 구현했다.
 - 후보를 미확인·처리·제외 3상태로 구분하고 미확인 항목이 남으면 실행을 차단한다.
 - 대응표는 사용자가 복원을 위해 선택한 경우에만 생성한다.
@@ -54,6 +54,20 @@ AI가 크게 기여한 구간:
 `deploy/start.bat`이 `serve.ps1`(.NET `HttpListener`, Windows 기본 구성요소, 관리자 권한 불필요)을 띄워 `http://localhost:8080`으로 제공한다. Ollama 기본 CORS 설정이 `http://localhost:*`를 허용하므로 사용자가 환경변수를 만질 필요가 없다.
 
 CSP `connect-src`가 `'none'` → `http://localhost:11434`, `http://127.0.0.1:11434`로 완화되었다. 이는 프로그램의 핵심 보안 주장을 바꾸는 변경이며, README·화면 문구를 함께 수정했다.
+
+### 배포 패키지 (2026-08-05)
+
+`dist/`가 `.gitignore` 대상이므로 저장소를 복사하는 방식으로는 대상 PC에 본체(`index.html`)가 전달되지 않는다. `npm run package`(`scripts/package.ps1`)가 빌드 후 `index.html`·`start.bat`·`serve.ps1`·`README.txt`를 `release/safeDoc-v<버전>.zip`(약 1.9MB)으로 묶는다.
+
+대상 PC 요구사항을 실측으로 확인했다.
+
+- `HttpListener`의 `http://localhost:<포트>/` 바인딩은 **관리자 권한 없이 성공한다.** URL 예약(`netsh http add urlacl`)이 필요 없다.
+- PowerShell 5.1과 .NET은 Windows 기본 구성요소이므로 **Node.js·npm·인터넷 연결이 필요 없다.**
+- ZIP을 다른 경로에 풀고 `start.bat`을 실행해 `HTTP 200`, `text/html; charset=utf-8`, 4,295,843바이트 응답과 `Cache-Control: no-store`를 확인했다.
+
+`start.bat`은 `index.html`이 없고 Node.js가 설치된 개발 저장소에서 실행되면 `npm ci` + `npm run build`를 수행할지 묻는다.
+
+**PowerShell 스크립트는 UTF-8 BOM으로 저장해야 한다.** BOM이 없으면 PowerShell 5.1이 ANSI로 읽어 한글 출력이 깨진다(`serve.ps1` 상단 주석 참조).
 
 ## 요구사항과 충돌하여 결정이 필요한 사항
 
@@ -165,11 +179,14 @@ CSP `connect-src`가 `'none'` → `http://localhost:11434`, `http://127.0.0.1:11
 ## 검증 명령
 
 ```bash
-npm test          # 단위시험 142개
+npm test          # 단위시험 17파일 151개
 npm run build     # 단일 HTML 빌드
+npm run package   # 배포용 ZIP 생성 (release/)
 npm run eval      # 규칙 단독 정확도 (AI 불필요)
 npm run eval:ai   # 규칙 vs 규칙+AI 비교 (Ollama 필요)
 deploy/start.bat  # 실행
 ```
+
+> Windows PowerShell에서 실행 정책으로 `npm`이 막히면 `npm.cmd`를 쓴다.
 
 Node가 없는 환경에서는 `scripts/devserve.ps1` + `test/browser/harness.html`로 핵심 로직을 브라우저에서 검증할 수 있다.
