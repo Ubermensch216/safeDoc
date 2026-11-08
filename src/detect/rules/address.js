@@ -9,17 +9,36 @@ const SIDO_ALT = SIDO_NAMES
   .sort((a, b) => b.length - a.length)
   .join('|');
 
-// 주소 구성요소가 이어지는 패턴
+// 주소 구성요소가 이어지는 패턴 (줄바꿈을 넘어 다른 행의 숫자·단어를 삼키지 않도록 [ \t]* 사용)
 const ADDR_BODY =
-  '(?:\\s*[가-힣0-9]+(?:시|군|구|읍|면|동|리|로|길|가))*' + // 행정구역·도로명
-  '(?:\\s*지하)?(?:\\s*\\d+(?:-\\d+)?(?:번지|번길|호|층|동|호수)?)*' + // 건물번호·번지
-  '(?:\\s*\\(?[가-힣0-9]+(?:동|가|아파트|빌라|타워|오피스텔|빌딩|주공|맨션)\\)?)?' + // 건물명
-  '(?:\\s*\\d+동)?(?:\\s*\\d+호)?'; // 동·호수
+  '(?:[ \\t]*[가-힣0-9]+(?:시|군|구|읍|면|동|리|로|길|가))*' + // 행정구역·도로명
+  '(?:[ \\t]*지하)?(?:[ \\t]*\\d+(?:-\\d+)?(?:번지|번길|호|층|동|호수)?)*' + // 건물번호·번지
+  '(?:[ \\t]*\\(?[가-힣0-9]+(?:동|가|아파트|빌라|타워|오피스텔|빌딩|주공|맨션)\\)?)?' + // 건물명
+  '(?:[ \\t]*\\d+동)?(?:[ \\t]*\\d+호)?'; // 동·호수
 
 const FULL_ADDR_REGEX = new RegExp(`(?:${SIDO_ALT})${ADDR_BODY}`, 'g');
 
 // 시·도 없이 도로명으로 시작: "중앙대로 100", "테헤란로 152"
-const ROAD_ADDR_REGEX = /[가-힣]{1,10}(?:대로|로|길|번길)\s?\d+(?:-\d+)?(?:번지)?(?:\s*,?\s*\d+동)?(?:\s*\d+호)?/g;
+const ROAD_ADDR_REGEX = /[가-힣]{1,10}(?:대로|로|길|번길)[ \t]?\d+(?:-\d+)?(?:번지)?(?:[ \t]*,?[ \t]*\d+동)?(?:[ \t]*\d+호)?/g;
+
+// 개인의 주소가 아닌 단독 지역명·공공장소·시설명 판별 (AI 후처리에서도 재사용)
+const PUBLIC_PLACE_ONLY =
+  /^(?:광안리|해수욕장|백사장|중점관리지역|관리지역|\d+구역|[가-힣\s]+(?:해수욕장|공원|광장|백사장|공항|항만|역|터미널|시청|구청|군청|도청|국|실|과|본부|사업소))$/;
+
+export function isNonAddressValue(value) {
+  if (typeof value !== 'string') return true;
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  if (SIDO_NAMES.includes(trimmed)) return true;
+  if (PUBLIC_PLACE_ONLY.test(trimmed)) return true;
+  // 최소한의 구체적 주소 요소(도로명·번지·건물·호수·숫자 또는 시군구+읍면동 2단계 이상 행정구역)가 있어야 함
+  const hasSpecificDetail = /(로|길|번지|호|층|아파트|빌라|오피스텔|빌딩|타워|맨션)|\d/.test(trimmed);
+  if (!hasSpecificDetail) {
+    const adminUnits = trimmed.match(/[가-힣]+(?:시|군|구|읍|면|동|리)(?=\s|$)/g) || [];
+    if (adminUnits.length < 2) return true;
+  }
+  return false;
+}
 
 export function detectAddress(text) {
   const results = [];

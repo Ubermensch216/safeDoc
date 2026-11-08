@@ -17,7 +17,21 @@ const IPV4_REGEX = /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g;
 const IPV6_REGEX = /\b(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f]{1,4}\b/g;
 
 // 생년월일: 1990-01-01, 1990.01.01, 1990년 1월 1일 등
-const BIRTH_REGEX = /(19\d{2}|20[0-2]\d)[.\-\/년\s]\s?(0?[1-9]|1[0-2])[.\-\/월\s]\s?(0?[1-9]|[12]\d|3[01])일?/g;
+// 두 자리 월·일을 먼저 배치하고 뒤쪽 숫자 경계(?!\d)를 확인해야 "1990-03-15"가 "1990-03-1"로 잘리지 않는다.
+const BIRTH_REGEX = /(?<!\d)(19\d{2}|20[0-2]\d)[.\-\/년\s]\s?(1[0-2]|0?[1-9])[.\-\/월\s]\s?(3[01]|[12]\d|0?[1-9])일?(?!\d)/g;
+
+// 생년월일이 아닌 일반 업무·로그 일자 라벨 ("접속 일시: 2026-04-17", "시행일: 2026.03.01" 등)
+const NON_BIRTH_DATE_LABEL =
+  /(?:(접속|작성|시행|접수|등록|발급|만료|점검|회의|계약|결제|입금|출금|방문|입사|퇴사|처리|발송|수신|개최|마감|공고|고시|기준)\s*(일시|일자|일|날짜)?|일시)\s*[:：=]?\s*$/;
+
+export function isNonBirthDateContext(text, start, end) {
+  const before = text.slice(Math.max(0, start - 20), start);
+  if (NON_BIRTH_DATE_LABEL.test(before)) return true;
+  // 뒤에 시각(" 09:12")이 이어지면 타임스탬프이지 생년월일이 아니다
+  const after = text.slice(end, Math.min(text.length, end + 10));
+  if (/^\s+\d{1,2}:\d{2}/.test(after)) return true;
+  return false;
+}
 
 const VEHICLE_USE_CHARS = '가나다라마거너더러머버서어저고노도로모보소오조구누두루무부수우주하허호배';
 
@@ -104,13 +118,15 @@ export function detectBirthDate(text) {
     if (!validateDate(y, mo, d)) continue;
     const start = m.index;
     const end = start + m[0].length;
-    // 날짜는 흔하므로 필드명이 있을 때만 신뢰도 상승 (FR-313: 생년월일로 추정되는 정보)
-    const fieldScore = fieldKeywordScore(text, start, 'BIRTH_DATE');
-    let score = 0.35 + 0.15 + fieldScore * 3;
-    if (score < 0.4) continue;
+    if (isNonBirthDateContext(text, start, end)) continue;
+    // 날짜는 일반 문서에 흔하므로 생년월일 필드명(인접 또는 표 헤더) 문맥이 있을 때만 후보로 선별 (FR-313)
+    const fieldScore = fieldKeywordScore(text, start, 'BIRTH_DATE', 35);
+    const headerScore = fieldScore === 0 ? fieldKeywordScore(text, start, 'BIRTH_DATE', 300) : 0;
+    if (fieldScore === 0 && headerScore === 0) continue;
+    const score = fieldScore > 0 ? 0.5 + fieldScore * 3 : 0.75;
     results.push(makeCandidate({
       text, start, end, type: 'BIRTH_DATE', baseScore: Math.min(score, 1),
-      detectionMethod: fieldScore > 0 ? 'CONTEXT' : 'REGEX',
+      detectionMethod: 'CONTEXT',
     }));
   }
   return results;

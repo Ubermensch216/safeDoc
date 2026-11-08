@@ -105,4 +105,76 @@ describe('오탐 판정 수집', () => {
     );
     expect(out).toHaveLength(0);
   });
+
+  it('근거 문구(reason)가 개인정보임을 긍정하는데 isPersonalInfo=false로 뒤집힌 자기모순 판정은 무시한다', () => {
+    const c = { text: '환불 계좌: 국민은행 123456-78-901234', base: 0 };
+    const out = collectDisputed(
+      [{ value: '123456-78-901234', isPersonalInfo: false, reason: '계좌번호로 판단됨' }],
+      ['123456-78-901234'],
+      c,
+    );
+    expect(out).toHaveLength(0);
+  });
+});
+
+describe('AI 응답 검증 — 문맥 기반 비개인정보(오탐) 배제', () => {
+  it('부서명·행정용어·기관명을 AI가 PERSON_NAME으로 반환해도 폐기한다', () => {
+    const adminChunk = {
+      text: '□ 안전관리 인력배치 총괄표\n1 백 사 장 18 문화국 소관사업소Ⅰ(18)\n4 백 사 장 36 신공항국(12), 해양실 소관 사업소(24)\n처리부서: 민원지원과',
+      base: 0,
+    };
+    const r = verifyItems([
+      { value: '안전관리', type: 'PERSON_NAME', reason: '이름 오인' },
+      { value: '인력배치', type: 'PERSON_NAME', reason: '이름 오인' },
+      { value: '문화국', type: 'PERSON_NAME', reason: '이름 오인' },
+      { value: '신공항국', type: 'PERSON_NAME', reason: '이름 오인' },
+      { value: '사업소', type: 'PERSON_NAME', reason: '이름 오인' },
+      { value: '민원지원과', type: 'PERSON_NAME', reason: '이름 오인' },
+    ], adminChunk);
+    expect(r.candidates).toHaveLength(0);
+    expect(r.rejected).toBe(6);
+  });
+
+  it('단독 광역·기초 지자체명이나 관광지명은 ADDRESS에서 배제하고 구체적 주소만 수락한다', () => {
+    const addrChunk = {
+      text: '강원도 지역 민원 및 광안리 해수욕장 안내. 거주지: 서울특별시 종로구 세종대로 209',
+      base: 0,
+    };
+    const r = verifyItems([
+      { value: '강원도', type: 'ADDRESS', reason: '지역명' },
+      { value: '광안리 해수욕장', type: 'ADDRESS', reason: '장소명' },
+      { value: '서울특별시 종로구 세종대로 209', type: 'ADDRESS', reason: '거주지 주소' },
+    ], addrChunk);
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0].originalText).toBe('서울특별시 종로구 세종대로 209');
+  });
+
+  it('일반 업무 일자·타임스탬프와 문서·주문번호는 생년월일·계좌번호에서 배제한다', () => {
+    const docChunk = {
+      text: '최근 접속 일시: 2026-04-17 09:12\n주문번호 2026-0001-000123 접수',
+      base: 0,
+    };
+    const r = verifyItems([
+      { value: '2026-04-17', type: 'BIRTH_DATE', reason: '날짜' },
+      { value: '2026-0001-000123', type: 'ACCOUNT_NO', reason: '번호' },
+    ], docChunk);
+    expect(r.candidates).toHaveLength(0);
+    expect(r.rejected).toBe(2);
+  });
+
+  it('한글 어절 내부의 부분 문자열 매칭은 폐기하고, 호칭·서술어가 붙은 성명은 본체만 정규화한다', () => {
+    const narrativeChunk = {
+      text: '예금주는 최다은이다. 이후 박서준 씨가 방문하여 안전관리 안내를 받았다.',
+      base: 0,
+    };
+    const r = verifyItems([
+      { value: '최다은이다', type: 'PERSON_NAME', reason: '예금주' },
+      { value: '박서준 씨', type: 'PERSON_NAME', reason: '방문자' },
+      { value: '안전', type: 'PERSON_NAME', reason: '안전관리의 일부' },
+    ], narrativeChunk);
+    const texts = r.candidates.map((c) => c.originalText);
+    expect(texts).toContain('최다은');
+    expect(texts).toContain('박서준');
+    expect(texts).not.toContain('안전');
+  });
 });

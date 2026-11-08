@@ -52,6 +52,8 @@ export function isDisputeEligible(c) {
   if (c.aiOnly || c.userModified) return false;
   if (['MANUAL', 'SEARCH', 'USER_RULE'].includes(c.detectionMethod)) return false;
   if (STRUCTURED_TYPES.has(c.type) && c.confidence >= 0.7) return false;
+  // 은행명·계좌 라벨이 함께 확인된 고신뢰 계좌번호는 묻지 않는다
+  if (c.type === 'ACCOUNT_NO' && c.confidence >= 0.75) return false;
   return true;
 }
 

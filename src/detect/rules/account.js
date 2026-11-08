@@ -9,8 +9,8 @@ const PLAIN_ACCOUNT_REGEX = /\d{10,14}/g;
 
 // 계좌가 아닌 번호류 라벨 (ANALYSIS 2.5의 검토 피로도 문제와 동일한 이유로 배제)
 // 라벨이 값 바로 앞에서 값의 정체를 밝히고 있으므로 은행명이 근처에 있어도 계좌가 아니다.
-const NON_ACCOUNT_LABEL =
-  /(주문|문서|계약|접수|전표|승인|송장|운송장|관리|사건|공문|공고|고시|허가|등록|발주|정산|참조|추적)\s*번호\s*[:：=]?\s*$/;
+export const NON_ACCOUNT_LABEL =
+  /(?:(주문|문서|계약|접수|전표|승인|송장|운송장|관리|사건|공문|공고|고시|허가|등록|발주|정산|참조|추적|우편|일련|고유|과제|식별)\s*번호|예산\s*코드)\s*[:：=]?\s*$/;
 
 // 연도로 시작하는 그룹(2026-…)은 문서번호·기안번호일 가능성이 높다
 const YEAR_PREFIX = /^(19|20)\d{2}-/;
@@ -29,10 +29,11 @@ export function detectAccount(text) {
     if (digits.length < 10 || digits.length > 16) continue;
     const start = m.index;
     const end = start + raw.length;
-    // 전화번호·주민번호 패턴과 겹치는 형식은 해당 규칙에 맡김 (중첩 처리에서 정리)
-    if (/^01[016789]/.test(digits) || /^\d{6}-\d{7}$/.test(raw)) continue;
+    // 전화번호(국제전화 +82-10-... 포함)·주민번호 패턴과 겹치는 형식은 제외
+    if (/^01[016789]/.test(digits) || /^820?1[016789]/.test(digits) || /^\d{6}-\d{7}$/.test(raw)) continue;
+    if (start > 0 && text[start - 1] === '+') continue;
     // 번호류 라벨이 값 바로 앞에 있으면 계좌가 아니다 (ANALYSIS 2.3)
-    if (NON_ACCOUNT_LABEL.test(text.slice(Math.max(0, start - 12), start))) continue;
+    if (NON_ACCOUNT_LABEL.test(text.slice(Math.max(0, start - 16), start))) continue;
     const fieldScore = fieldKeywordScore(text, start, 'ACCOUNT_NO');
     const bankScore = bankContextScore(text, start, end);
     // 연도형은 계좌 문맥(필드명·은행명)이 있을 때만 인정한다 (ANALYSIS 2.3)
