@@ -70,7 +70,7 @@ const ORG_AND_OBJECT_SUFFIX = new RegExp(
     // 사업소·관공서·시설
     '사업소|사무소|연구소|보건소|파출소|출장소|영업소|관리소|상담소|진료소|대피소|보관소|정비소|휴게소|안내소|발전소|변전소',
     '경찰서|소방서|세무서|우체국|기상청|경찰청|국세청|관세청|조달청|통계청|병무청|산림청|특허청|검찰청|교육청|시청|구청|군청|도청|본청|지청',
-    '법원|감사원|연구원|교육원|연수원|훈련원|보육원|양로원|요양원|재활원|감정원|평가원|인증원|진흥원|개발원|정보원|안전원|의료원|병원|한의원|유치원|수목원|동물원|식물원',
+    '법원|감사원|연구원|교육원|연수원|훈련원|보육원|양로원|요양원|재활원|감정원|평가원|인증원|진흥원|개발원|정보원|안전원|의료원|병원|한의원|유치원|수목원|동물원|식물원|박물관|미술관|역사관|기념관|도서관|체육관|전시관|복지관|수련관|회관|체험관',
     '위원회|협의회|심의회|이사회|연구회|연합회|체육회|장학회|후원회|동호회',
     // 장소·장(場)·문서장(狀)
     '정수장|매립장|소각장|주차장|운동장|정류장|해수욕장|백사장|경기장|수영장|공연장|전시장|행사장|회의장|시험장|교육장|작업장|사업장|공사장|선착장|골프장|캠핑장|야영장|예식장|장례식장',
@@ -94,6 +94,9 @@ const ADMIN_DEPT_PATTERN = new RegExp(
   '(문화|관광|콘텐츠|산업|신공항|공항|항만|해양|수도|전략|안전|관리|인력|배치|행정|민원|지원|복지|환경|교통|건설|도시|건축|토목|주택|도로|하천|공원|녹지|산림|농정|수산|경제|재정|기획|예산|회계|세무|총무|인사|교육|정보|전산|보안|감사|홍보|법무|노무|재난|소방|경찰|보건|위생|의약|식품|여성|가족|아동|청소년|노인|장애인|일자리|미래|혁신|디지털|스마트|시설|운영|점검|현장|비상|대응|상황|통제|소관|사업|진료|소아|피부|정형외|신경외|산부인|비서|상담|자료|대기|휴게|기계|당직|교무|연구|실험|서버|경비|숙직|강의|실습|도서|열람|방송|인쇄|문서|화장|탈의|조리|급식|수술|입원|응급|검사|원무|재무|구매|자재|물류|생산|품질|영업|개발|기술|고객)(국|실|과|팀|부|단|청|소|처|관|본부|센터)$',
 );
 
+// 공무원·공공기관 직급·직렬 표기 ("행정6급", "공업6급", "학예연구사", "시설7급")
+const RANK_TITLE_PATTERN = /(?:[가-힣]{0,6}\d급|학예연구사|연구사|지도사)$/;
+
 // 일반 역할·대상자 명사 ("신청자", "대상자", "관계자", "담당자", "배석자" 등)
 const ROLE_JA_PATTERN = new RegExp(
   '(관계|관련|해당|신청|대상|지원|후보|참가|방문|거주|운전|보행|사망|부상|실종|동반|이용|사용|소비|판매|구매|공급|채권|채무|임차|수급|유권|납세|응시|당선|입찰|낙찰|출입|체류|입국|출국|생존|구조|피해|가해|점유|발주|가입|수익|경영|생산|수요|노동|근로|관리|운영|책임|실무|검토|결재|승인|참석|불참|발표|진행|사회|강연|적격|위반|체납|미납|연체|희망|예정|선정|탈락|포기|이수|수료|졸업|전출|전입|퇴직|재직|휴직|복직|구직|실업|취업|창업|폐업|경력|초보|실제소유|비상연락|이해관계|특수관계|민원|담당|소유|대표|작성|접수|수신|발신|보호|계약|피보험|상담|배석|처리)자$',
@@ -101,7 +104,13 @@ const ROLE_JA_PATTERN = new RegExp(
 
 // 동사·형용사·관형형·어미 활용형 ("연락하여", "가능한", "동일한", "주십시오", "부재중일", "안내해", "남긴")
 const VERB_OR_MODIFIER_SUFFIX =
-  /(하여|하고|하는|하니|하면|하며|했다|한다|합니다|되어|된다|됩니다|하기|하지|가능한|동일한|유일한|필요한|중요한|명확한|정확한|적절한|충분한|다양한|특별한|간단한|복잡한|유사한|상세한|긴급한|신속한|안전한|위험한|불가한|부당한|정당한|타당한|합당한|십시오|세요|시오|바랍니다|습니다|았다|었다|였다|겠다|는지|은지|았던|었던|였던|해서|해야|해도|해주|해달|드리|드림|주었|받았|맡았|남긴|보낸|찾은|없는|있는|같은|따른|위한|관한|대한|부재중일|안내해)$/;
+  /(하여|하고|하는|하니|하면|하며|했다|한다|합니다|되어|된다|됩니다|하기|하지|가능한|동일한|유일한|필요한|중요한|명확한|정확한|적절한|충분한|다양한|특별한|간단한|복잡한|유사한|상세한|긴급한|신속한|안전한|위험한|불가한|부당한|정당한|타당한|합당한|십시오|세요|시오|바랍니다|습니다|았다|었다|였다|겠다|는지|았던|었던|였던|해서|해야|해도|해주|해달|드리|드림|주었|받았|맡았|남긴|보낸|찾은|없는|있는|같은|따른|위한|관한|대한|부재중일|안내해)$/;
+
+// 서술격 조사·연결 어미 단독 단어 ("이다", "이며", "이고", "이나" 등은 성명이 아님)
+const COPULA_WORDS = new Set(['이다', '이며', '이고', '이라', '이나', '이란', '이지', '이든', '임에', '인한', '인데']);
+
+// 법인·회사 접두어 ("주식회사 한빛", "(주) 미래" 등)
+const COMPANY_PREFIX_RE = /(?:주식회사|유한회사|합자회사|합명회사|사단법인|재단법인|학교법인|\(주\)|\[주\])[ \t]+$/;
 
 // 한글 숫자 표기 ("공일공", "구팔칠육", "오사삼이" 등 전화·주민번호 구술 표기)
 const HANGUL_DIGIT_ONLY = /^[공영일이삼사오육칠팔구십백천만억조]+$/;
@@ -150,6 +159,7 @@ export function isNonNameWord(word) {
     return false;
   }
 
+  if (COPULA_WORDS.has(trimmed)) return true;
   if (NAME_STOPWORDS.has(trimmed)) return true;
   if (NAME_TITLES.includes(trimmed)) return true;
   if (NAME_FIELD_KEYWORDS.includes(trimmed) || COLON_NAME_LABELS.includes(trimmed)) return true;
@@ -163,6 +173,7 @@ export function isNonNameWord(word) {
   if (ORG_AND_OBJECT_SUFFIX.test(trimmed)) return true;
   if (ADMIN_DEPT_PATTERN.test(trimmed)) return true;
   if (ROLE_JA_PATTERN.test(trimmed)) return true;
+  if (RANK_TITLE_PATTERN.test(trimmed)) return true;
 
   return false;
 }
@@ -174,7 +185,7 @@ const PRECEDING_NON_NAME_LABEL_RE = new RegExp(
 export function isPrecededByNonNameLabel(text, start) {
   const lineStart = Math.max(0, text.lastIndexOf('\n', start - 1) + 1, start - 20);
   const before = text.slice(lineStart, start);
-  return PRECEDING_NON_NAME_LABEL_RE.test(before);
+  return PRECEDING_NON_NAME_LABEL_RE.test(before) || COMPANY_PREFIX_RE.test(before);
 }
 
 // 뒤쪽 같은 줄에 조직·정원·소관 표기("문화국 소관사업소", "신공항국(12)", "사업소Ⅰ(18)")가 이어지는지 확인
@@ -191,6 +202,11 @@ const HANGUL_WORD = /[가-힣]{2,5}/g;
 // 직위·호칭 뒤에 조사("신동현 님은", "박서준 씨가", "김서연 주무관이")가 붙는 경우도 함께 인식
 const TITLE_PATTERN = new RegExp(
   `^\\s?(${NAME_TITLES.join('|')})(?:은|는|이|가|을|를|의|께|께서|에게|한테|과|와|도|만|으로부터|에게서)?(?![가-힣])`,
+);
+
+// 이름 앞에 붙는 직위·직급·호칭 ("팀장 홍길동", "공업6급 김일", "행정6급 하은지", "학예연구사 김민준")
+const PRECEDING_TITLE_PATTERN = new RegExp(
+  `(?:^|[^가-힣0-9])(?:${NAME_TITLES.join('|')}|[가-힣]{0,6}\\d급|[가-힣]{0,4}(?:연구사|지도사))[ \\t]+$`,
 );
 
 // 사람에게만 붙는 여격/높임 조사 또는 동반 표현 ("윤소라에게", "홍길동께서", "강태오와 함께")
@@ -223,9 +239,10 @@ function isNearStructuredPii(text, start, end, otherPiiRanges) {
     if (dist >= 40) continue;
     const between = r.start >= end ? text.slice(end, r.start) : text.slice(r.end, start);
     const newlines = (between.match(/\n/g) || []).length;
-    if (newlines <= 1) return true;
+    if (newlines === 0) return { near: true, sameLine: true };
+    if (newlines === 1) return { near: true, sameLine: false };
   }
-  return false;
+  return { near: false, sameLine: false };
 }
 
 // 다중 어절 외국인 성명 후보 검증 ("응우옌 티 흐엉", "제임스 카터", "리 웨이", "사토 유키")
@@ -380,15 +397,20 @@ export function detectName(text, { otherPiiRanges = [] } = {}) {
     if (base.length < 2 || base.length > 4) continue;
     if (isNonNameWord(base)) continue;
 
+    // 뒤가 한글이나 숫자이면 복합어·직급·코드의 일부이므로 제외 ("공업6급"의 "공업" 등)
+    if (m.index + raw.length < text.length && /[가-힣0-9]/.test(text[m.index + raw.length])) continue;
+
     const baseEnd = m.index + base.length;
     const after = text.slice(baseEnd, baseEnd + 10);
-    const hasTitle = TITLE_PATTERN.test(after);
+    const lineStart = Math.max(0, text.lastIndexOf('\n', m.index - 1) + 1, m.index - 25);
+    const before = text.slice(lineStart, m.index);
+    const hasTitle = TITLE_PATTERN.test(after) || PRECEDING_TITLE_PATTERN.test(before);
     if (!startsWithValidSurname(base, hasTitle)) continue;
     if (isPrecededByNonNameLabel(text, m.index)) continue;
     if (isFollowedByOrgContext(text, baseEnd)) continue;
     if (/^\s*[:：=]/.test(text.slice(baseEnd, baseEnd + 3))) continue;
 
-    candidates.push({ base, variants, start: m.index, baseEnd, after, hasTitle });
+    candidates.push({ base, variants, start: m.index, baseEnd, after, before, hasTitle });
     wordCount.set(base, (wordCount.get(base) || 0) + 1);
   }
 
@@ -419,8 +441,11 @@ export function detectName(text, { otherPiiRanges = [] } = {}) {
     }
 
     // (d) 같은 줄(또는 인접 줄) 정형 개인정보와의 인접성 (명단·대장·표)
-    if (isNearStructuredPii(text, c.start, c.baseEnd, otherPiiRanges)) {
-      score += 0.2;
+    const piiProximity = isNearStructuredPii(text, c.start, c.baseEnd, otherPiiRanges);
+    if (piiProximity.sameLine) {
+      score += 0.25;
+    } else if (piiProximity.near) {
+      score += 0.15;
     }
 
     if (score >= 0.4) {
