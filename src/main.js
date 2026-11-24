@@ -17,6 +17,7 @@ import { $, $$, toast, showError, showScreen, escapeHtml } from './ui/dom.js';
 import { buildPreviewHtml } from './ui/highlight.js';
 import { renderAfterHtml, renderSummaryHtml, renderSummaryDetailHtml, renderDocMeta } from './ui/render.js';
 import { loadStoredPolicies } from './ui/storage.js';
+import { linkScroll } from './ui/syncScroll.js';
 import { AiController } from './ui/aiController.js';
 import { ReviewController } from './ui/reviewController.js';
 import { bindRestoreEvents } from './ui/restoreController.js';
@@ -380,6 +381,9 @@ function bindConfirmAndResultEvents() {
     const name = resultFileName(session.file.name, '_처리요약').replace(/\.[^.]+$/, '.json');
     downloadBlob(summaryToBlob(session.result.summary), name);
   });
+
+  // 나란히 비교: 처리 전·후 문서를 함께 스크롤한다
+  linkScroll($('#compare-split-before'), $('#compare-split-after'));
 
   // 변경 항목/나란히 비교 토글
   $$('.seg-btn').forEach((btn) => {
