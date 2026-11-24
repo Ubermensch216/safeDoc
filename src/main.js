@@ -37,7 +37,6 @@ let settings = null;
 // ---------- 초기화 ----------
 
 function init() {
-  $('#version-info').textContent = `v${PROGRAM_VERSION} · 규칙 v${RULE_VERSION}`;
   document.title = PROGRAM_NAME;
 
   loadStoredPolicies(session.typePolicies);
@@ -119,8 +118,10 @@ function activateTab(btn, { focus = false } = {}) {
     settings: ['관리', '설정'],
   };
   const [eyebrow, title] = titles[btn.dataset.tab];
-  $('#page-eyebrow').textContent = eyebrow;
-  $('#page-title').textContent = title;
+  const pageEyebrow = $('#page-eyebrow');
+  if (pageEyebrow) pageEyebrow.textContent = eyebrow;
+  const pageTitle = $('#page-title');
+  if (pageTitle) pageTitle.textContent = title;
   if (focus) btn.focus();
 }
 

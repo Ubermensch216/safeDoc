@@ -28,8 +28,10 @@ export class AiController {
   }
 
   setBadge(state, text) {
-    $('#ai-badge').className = `security-state ${state}`;
-    $('#ai-badge-text').textContent = text;
+    const badge = $('#ai-badge');
+    if (badge) badge.className = `security-state ${state}`;
+    const badgeText = $('#ai-badge-text');
+    if (badgeText) badgeText.textContent = text;
     const settingsState = $('#settings-ai-state');
     if (settingsState) settingsState.textContent = text;
   }

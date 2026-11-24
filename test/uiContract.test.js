@@ -13,7 +13,14 @@ describe('전면 개편 UI 계약', () => {
     expect(html).toContain('id="btn-to-confirm"');
   });
 
-  it('작업 중심 내비게이션에 접근 가능한 이름을 제공한다', () => {
+  it('작업 중심 내비게이션에 접근 가능한 이름을 제공하고 상단 바에 메뉴명만 배치한다', () => {
+    expect(html).toContain('class="app-topbar"');
+    expect(html).not.toContain('class="app-sidebar"');
+    expect(html).not.toContain('class="nav-section-label"');
+    expect(html).not.toContain('class="sidebar-status"');
+    expect(html).not.toContain('class="workspace-header"');
+    expect(html).not.toContain('class="nav-icon"');
+    expect(html).not.toContain('id="version-info"');
     expect(html).toContain('aria-label="새 비식별 작업"');
     expect(html).toContain('aria-label="비식별 처리"');
     expect(html).toContain('aria-label="원본 복원"');

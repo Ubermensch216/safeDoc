@@ -15,50 +15,31 @@
   <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
 
   <div class="app-shell">
-    <aside class="app-sidebar" aria-label="safeDoc 메뉴">
+    <header class="app-topbar" aria-label="safeDoc 메뉴">
       <h1 class="brand">
         <img class="brand-logo" alt="" aria-hidden="true" />
-        <span class="brand-copy"><span class="brand-name">safeDoc</span><span class="brand-version" id="version-info"></span></span>
+        <span class="brand-copy"><span class="brand-name">safeDoc</span></span>
         <span class="sr-only">개인정보 비식별화 프로그램</span>
       </h1>
+
+      <nav class="top-nav" aria-label="주요 기능">
+        <button class="tab-btn active" data-tab="deidentify" id="tabbtn-deidentify" aria-current="page" aria-label="비식별 처리">
+          <span class="nav-label">비식별 처리</span>
+        </button>
+        <button class="tab-btn" data-tab="restore" id="tabbtn-restore" aria-label="원본 복원">
+          <span class="nav-label">원본 복원</span>
+        </button>
+        <button class="tab-btn" data-tab="settings" id="tabbtn-settings" aria-label="설정">
+          <span class="nav-label">설정</span>
+        </button>
+      </nav>
 
       <button id="btn-new-task" class="btn primary new-task-btn" aria-label="새 비식별 작업">
         <span aria-hidden="true">＋</span><span class="nav-label">새 비식별 작업</span>
       </button>
-
-      <nav class="side-nav" aria-label="주요 기능">
-        <p class="nav-section-label">작업</p>
-        <button class="tab-btn active" data-tab="deidentify" id="tabbtn-deidentify" aria-current="page" aria-label="비식별 처리">
-          <span class="nav-icon" aria-hidden="true">▤</span><span class="nav-label">비식별 처리</span>
-        </button>
-        <p class="nav-section-label">도구</p>
-        <button class="tab-btn" data-tab="restore" id="tabbtn-restore" aria-label="원본 복원">
-          <span class="nav-icon" aria-hidden="true">↶</span><span class="nav-label">원본 복원</span>
-        </button>
-        <p class="nav-section-label">관리</p>
-        <button class="tab-btn" data-tab="settings" id="tabbtn-settings" aria-label="설정">
-          <span class="nav-icon" aria-hidden="true">⚙</span><span class="nav-label">설정</span>
-        </button>
-      </nav>
-
-      <div class="sidebar-status">
-        <div class="security-state"><span class="dot"></span><span class="nav-label">로컬 처리</span></div>
-        <div class="security-state" id="ai-badge" title="AI 엔진 상태">
-          <span class="dot"></span><span class="nav-label" id="ai-badge-text">AI 확인 중…</span>
-        </div>
-        <p class="sidebar-note nav-label">문서와 개인정보는<br />이 PC를 벗어나지 않습니다.</p>
-      </div>
-    </aside>
+    </header>
 
     <div class="app-workspace">
-      <header class="workspace-header">
-        <div>
-          <p class="eyebrow" id="page-eyebrow">비식별 작업</p>
-          <h2 id="page-title">새 비식별 작업</h2>
-        </div>
-        <div class="header-trust"><span class="dot"></span>외부 전송 없음</div>
-      </header>
-
       <main id="main-content">
         <section id="tab-deidentify" class="tab-panel active" aria-labelledby="tabbtn-deidentify">
           <ol class="workflow-steps" id="workflow-steps" aria-label="비식별 처리 진행 단계">
@@ -84,7 +65,8 @@
               <div id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="문서 선택 또는 끌어놓기">
                 <span class="drop-icon" aria-hidden="true">＋</span>
                 <p class="drop-main">문서를 여기에 놓으세요</p>
-                <p class="drop-sub">또는 클릭해서 컴퓨터에서 선택</p>
+                <p class="drop-sub">또는 아래 버튼을 눌러 파일을 선택하세요</p>
+                <span class="btn primary lg drop-cta" aria-hidden="true">컴퓨터에서 문서 선택</span>
                 <span class="file-support">TXT · CSV · XLSX · DOCX · HWPX · PDF · 최대 20MB</span>
                 <input type="file" id="file-input" accept=".txt,.csv,.xlsx,.docx,.hwpx,.pdf" hidden />
               </div>
