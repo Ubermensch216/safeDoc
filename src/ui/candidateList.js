@@ -183,9 +183,12 @@ export class CandidateListView {
     const badgeHtml = src.badge
       ? `<span class="src-badge ${src.cls.replace('src-', '')}">${src.badge}</span>`
       : '';
+    const metaRowHtml = (badgeHtml || reasonHtml)
+      ? `<div class="cand-line cand-meta">${badgeHtml}${reasonHtml}</div>`
+      : '';
     // 유형 재판정으로 AI 판단이 교정된 경우 감사 가능하도록 남긴다
     const fixedHtml = c.aiReportedType
-      ? `<span class="type-badge" title="AI는 ${escapeHtml(PII_TYPES[c.aiReportedType]?.label || c.aiReportedType)}(으)로 보았으나 규칙 검증으로 교정됨">유형 교정</span>`
+      ? `<span class="type-badge type-fixed" title="AI는 ${escapeHtml(PII_TYPES[c.aiReportedType]?.label || c.aiReportedType)}(으)로 보았으나 규칙 검증으로 교정됨">유형 교정</span>`
       : '';
 
     const typeLabel = PII_TYPES[c.type]?.label || c.type;
@@ -195,22 +198,29 @@ export class CandidateListView {
     const reviewLabel = REVIEW_STATE_LABELS[reviewState];
 
     el.innerHTML = `
-<div class="cand-main">
-  <div class="cand-line">
-    <span class="cand-value" title="${escapeHtml(c.originalText)}">${escapeHtml(c.originalText)}</span>
-    <span class="type-badge">${escapeHtml(typeLabel)}</span>
-    ${fixedHtml}
+<div class="cand-head">
+  <div class="cand-main">
+    <div class="cand-line">
+      <span class="cand-value" title="${escapeHtml(c.originalText)}">${escapeHtml(c.originalText)}</span>
+      <span class="type-badge">${escapeHtml(typeLabel)}</span>
+      ${fixedHtml}
+    </div>
+    ${metaRowHtml}
   </div>
-  <div class="cand-line cand-meta">${badgeHtml}${reasonHtml}</div>
+  <div class="cand-controls">
+    <div class="cand-decisions" role="group" aria-label="${escapeHtml(forWhat)} 검토 결정">
+      <button class="c-decision process" data-state="${REVIEW_STATES.PROCESS}" aria-pressed="${reviewState === REVIEW_STATES.PROCESS}"><span class="decision-icon" aria-hidden="true">✓</span>처리</button>
+      <button class="c-decision exclude" data-state="${REVIEW_STATES.EXCLUDE}" aria-pressed="${reviewState === REVIEW_STATES.EXCLUDE}"><span class="decision-icon" aria-hidden="true">—</span>제외</button>
+    </div>
+    <button class="cand-toggle" aria-expanded="${isOpen}"
+            aria-label="${escapeHtml(forWhat)} 상세 ${isOpen ? '접기' : '펼치기'}">${isOpen ? '▴' : '▾'}</button>
+  </div>
 </div>
-<div class="cand-decisions" role="group" aria-label="${escapeHtml(forWhat)} 검토 결정">
-  <button class="c-decision process" data-state="${REVIEW_STATES.PROCESS}" aria-pressed="${reviewState === REVIEW_STATES.PROCESS}"><span class="decision-icon" aria-hidden="true">✓</span>처리</button>
-  <button class="c-decision exclude" data-state="${REVIEW_STATES.EXCLUDE}" aria-pressed="${reviewState === REVIEW_STATES.EXCLUDE}"><span class="decision-icon" aria-hidden="true">—</span>제외</button>
-</div>
-<button class="cand-toggle" aria-expanded="${isOpen}"
-        aria-label="${escapeHtml(forWhat)} 상세 ${isOpen ? '접기' : '펼치기'}">${isOpen ? '▴' : '▾'}</button>
 <p class="cand-context">“${escapeHtml(context)}”</p>
-<p class="cand-policy">${escapeHtml(typeLabel)} · ${reviewLabel} · 적용 방식: <strong>${escapeHtml(ACTION_LABELS[action])}</strong></p>
+<div class="cand-foot">
+  <span class="cand-state-pill state-${reviewState.toLowerCase()}">${reviewLabel}</span>
+  <span class="cand-action-text">적용 방식: <strong>${escapeHtml(ACTION_LABELS[action])}</strong></span>
+</div>
 ${isOpen ? `
 <div class="cand-detail">
   <label class="inline-field">유형
@@ -220,7 +230,7 @@ ${isOpen ? `
     <select class="c-action" aria-label="${escapeHtml(forWhat)} 처리방식">${optionsHtml(ACTION_ENTRIES, action)}</select>
   </label>
   <span class="${confClass(c.confidence)}">${confidenceLabel(c.confidence)} ${c.confidence.toFixed(2)}</span>
-  <span>${METHOD_LABELS[c.detectionMethod] || c.detectionMethod}</span>
+  <span class="cand-method">${METHOD_LABELS[c.detectionMethod] || c.detectionMethod}</span>
   <button class="btn tiny c-same">동일값 일괄</button>
 </div>` : ''}`;
   }

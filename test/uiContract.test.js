@@ -39,5 +39,10 @@ describe('전면 개편 UI 계약', () => {
   it('대응표 미생성을 기본값으로 둔다', () => {
     expect(html).toContain('name="mapping-choice" value="no" checked');
     expect(html).toContain('id="btn-download-mapping" class="btn danger-outline" hidden');
+    expect(html).toContain('data-compare="side-by-side"');
+    expect(html).not.toContain('data-compare="after"');
+    expect(html).not.toContain('data-compare="before"');
+    expect(html).not.toContain('id="btn-new-doc"');
+    expect(html).not.toContain('id="btn-finish"');
   });
 });

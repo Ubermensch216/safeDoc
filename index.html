@@ -175,9 +175,11 @@
                     <input type="text" id="search-input" placeholder="문자열 검색" aria-label="문자열 검색" />
                     <select id="search-type" aria-label="지정할 유형"></select>
                     <button id="btn-search-add" class="btn tiny">지정</button>
-                    <button id="btn-select-all" class="btn tiny">전체 처리</button>
-                    <button id="btn-deselect-all" class="btn tiny ghost">전체 제외</button>
-                    <button id="btn-undo" class="btn tiny tertiary">되돌리기</button>
+                    <div class="candidate-bulk-actions">
+                      <button id="btn-select-all" class="btn tiny">전체 처리</button>
+                      <button id="btn-deselect-all" class="btn tiny ghost">전체 제외</button>
+                      <button id="btn-undo" class="btn tiny tertiary">되돌리기</button>
+                    </div>
                   </div>
                 </details>
                 <p class="kbd-hint"><kbd>J</kbd><kbd>K</kbd> 이동 · <kbd>I</kbd> 처리 · <kbd>X</kbd> 제외 · <kbd>Enter</kbd> 상세</p>
@@ -227,19 +229,20 @@
             </section>
             <section class="result-grid">
               <div class="panel">
-                <header class="pane-head"><h3>변경 내용 확인</h3><div class="segmented" role="group" aria-label="비교 보기"><button class="seg-btn active" data-compare="changes">변경 항목</button><button class="seg-btn" data-compare="after">전체 문서</button><button class="seg-btn" data-compare="before">처리 전</button></div></header>
+                <header class="pane-head"><h3>변경 내용 확인</h3><div class="segmented" role="group" aria-label="비교 보기"><button class="seg-btn active" data-compare="changes">변경 항목</button><button class="seg-btn" data-compare="side-by-side">나란히 비교</button></div></header>
                 <div id="compare-changes" class="change-list"></div>
-                <div id="compare-after" class="preview-content" hidden></div>
-                <div id="compare-before" class="preview-content" hidden></div>
+                <div id="compare-side-by-side" class="compare-split" hidden>
+                  <div class="compare-col"><h4>처리 전</h4><div id="compare-split-before" class="preview-content"></div></div>
+                  <div class="compare-col"><h4>처리 후</h4><div id="compare-split-after" class="preview-content"></div></div>
+                </div>
               </div>
               <aside class="panel additional-files"><h3>추가 파일</h3><button id="btn-download-summary" class="btn secondary">처리 내역 보고서</button><button id="btn-download-mapping" class="btn danger-outline" hidden>대응표 다운로드 · 민감정보</button><p id="mapping-result-note" class="muted">대응표를 생성하지 않았습니다.</p></aside>
             </section>
-            <div class="result-footer"><button id="btn-new-doc" class="btn">새 문서 처리</button><button id="btn-finish" class="btn ghost">작업 데이터 지우고 종료</button></div>
           </div>
         </section>
 
         <section id="tab-restore" class="tab-panel" aria-labelledby="tabbtn-restore">
-          <div class="page-intro"><p class="eyebrow">도구</p><h3>원본 복원</h3><p>비식별 문서와 대응표의 일치 여부를 확인한 뒤 복원 가능한 항목만 되돌립니다.</p></div>
+          <div class="page-intro"><p>비식별 문서와 대응표의 일치 여부를 확인한 뒤 복원 가능한 항목만 되돌립니다.</p></div>
           <ol class="restore-steps" aria-label="복원 단계"><li class="current">1. 파일 선택</li><li>2. 일치 확인</li><li>3. 복원 실행</li><li>4. 완료</li></ol>
           <section class="panel restore-panel">
             <div class="restore-inputs">
@@ -253,7 +256,7 @@
         </section>
 
         <section id="tab-settings" class="tab-panel" aria-labelledby="tabbtn-settings">
-          <div class="page-intro"><p class="eyebrow">관리</p><h3>설정</h3><p>업무 정책과 AI 연결, 사용자 탐지 규칙을 관리합니다.</p></div>
+          <div class="page-intro"><p>업무 정책과 AI 연결, 사용자 탐지 규칙을 관리합니다.</p></div>
           <div class="settings-layout">
             <nav class="settings-nav" aria-label="설정 항목"><button class="settings-nav-btn active" data-settings="policy">처리 정책</button><button class="settings-nav-btn" data-settings="ai">AI 엔진</button><button class="settings-nav-btn" data-settings="rules">사용자 규칙</button></nav>
             <div>

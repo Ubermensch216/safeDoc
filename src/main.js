@@ -269,12 +269,24 @@ function renderConfirmScreen() {
 
 function renderChangeList(applied) {
   if (applied.length === 0) return '<p class="empty-state">변경된 항목이 없습니다.</p>';
-  return applied.map((item) => `
-    <div class="change-item">
-      <code title="${escapeHtml(item.originalText)}">${escapeHtml(item.originalText)}</code>
-      <span class="change-arrow" aria-hidden="true">→</span>
-      <code title="${escapeHtml(item.replacementText)}">${escapeHtml(item.replacementText)}</code>
-    </div>`).join('');
+  const header = `
+    <div class="change-header" aria-hidden="true">
+      <span>유형</span>
+      <span>처리 전 (원문)</span>
+      <span></span>
+      <span>처리 후 (비식별)</span>
+    </div>`;
+  const rows = applied.map((item) => {
+    const typeLabel = PII_TYPES[item.type]?.label || item.type;
+    return `
+      <div class="change-item">
+        <span class="change-type">${escapeHtml(typeLabel)}</span>
+        <code class="change-before-val" title="${escapeHtml(item.originalText)}">${escapeHtml(item.originalText)}</code>
+        <span class="change-arrow" aria-hidden="true">→</span>
+        <code class="change-after-val" title="${escapeHtml(item.replacementText)}">${escapeHtml(item.replacementText)}</code>
+      </div>`;
+  }).join('');
+  return header + rows;
 }
 
 async function executeDeidentify() {
@@ -324,10 +336,11 @@ async function executeDeidentify() {
       warnBox.hidden = true;
     }
 
+    const beforeHtml = buildPreviewHtml(session.parsed.text, session.candidates.filter((c) => c.selected));
+    const afterHtml = renderAfterHtml(afterText, applied);
     $('#result-summary').innerHTML = renderSummaryHtml(summary);
-    $('#compare-before').innerHTML =
-      buildPreviewHtml(session.parsed.text, session.candidates.filter((c) => c.selected));
-    $('#compare-after').innerHTML = renderAfterHtml(afterText, applied);
+    $('#compare-split-before').innerHTML = beforeHtml;
+    $('#compare-split-after').innerHTML = afterHtml;
     $('#compare-changes').innerHTML = renderChangeList(applied);
     $('#btn-download-mapping').hidden = !shouldCreateMapping;
     $('#mapping-result-note').textContent = shouldCreateMapping
@@ -365,21 +378,14 @@ function bindConfirmAndResultEvents() {
     downloadBlob(summaryToBlob(session.result.summary), name);
   });
 
-  // 변경 항목/처리 후/처리 전 토글
+  // 변경 항목/나란히 비교 토글
   $$('.seg-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       $$('.seg-btn').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
       $('#compare-changes').hidden = btn.dataset.compare !== 'changes';
-      $('#compare-after').hidden = btn.dataset.compare !== 'after';
-      $('#compare-before').hidden = btn.dataset.compare !== 'before';
+      $('#compare-side-by-side').hidden = btn.dataset.compare !== 'side-by-side';
     });
-  });
-
-  $('#btn-new-doc').addEventListener('click', () => newSession());
-  $('#btn-finish').addEventListener('click', () => {
-    newSession();
-    toast('작업정보를 초기화했습니다.');
   });
 }
 
@@ -398,8 +404,8 @@ function newSession() {
 function resetWorkUi() {
   review.reset();
   $('#compare-changes').innerHTML = '';
-  $('#compare-before').innerHTML = '';
-  $('#compare-after').innerHTML = '';
+  $('#compare-split-before').innerHTML = '';
+  $('#compare-split-after').innerHTML = '';
   $('#result-summary').innerHTML = '';
   $('#doc-meta').innerHTML = '';
   $('#final-confirm').checked = false;

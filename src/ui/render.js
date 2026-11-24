@@ -83,5 +83,5 @@ export function renderSummaryHtml(summary) {
     <tbody>${actionRows || '<tr><td colspan="2">없음</td></tr>'}</tbody></table>
 </div>
 ${aiHtml}
-<p class="muted">프로그램 ${escapeHtml(summary.programVersion)} · 탐지규칙 ${escapeHtml(summary.ruleVersion)} · ${new Date(summary.processedAt).toLocaleString('ko-KR')}</p>`;
+<p class="muted">처리 일시: ${new Date(summary.processedAt).toLocaleString('ko-KR')}</p>`;
 }
