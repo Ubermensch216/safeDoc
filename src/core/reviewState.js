@@ -41,7 +41,3 @@ export function reviewCounts(candidates) {
   }
   return counts;
 }
-
-export function hasPendingReview(candidates) {
-  return reviewCounts(candidates).pending > 0;
-}

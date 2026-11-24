@@ -3,7 +3,7 @@
 
 import { PROGRAM_VERSION } from '../version.js';
 import { RULE_VERSION } from '../detect/engine.js';
-import { PII_TYPES, ACTION_LABELS } from '../detect/types.js';
+import { PII_TYPES } from '../detect/types.js';
 
 // AI 탐지 감사 블록 (계획 C-9)
 // completed가 false이면 검사하지 않은 구간이 남아 있다는 뜻이므로
@@ -73,8 +73,4 @@ export function summaryToBlob(summary) {
 
 export function typeLabel(code) {
   return PII_TYPES[code]?.label || code;
-}
-
-export function actionLabel(code) {
-  return ACTION_LABELS[code] || code;
 }
