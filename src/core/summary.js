@@ -25,6 +25,8 @@ export function buildAiAudit(aiStats) {
     skippedCommonValues: aiStats.skippedCommonValues || 0,
     failedChunks: aiStats.failedChunks,
     failedVerifications: aiStats.failedVerifications,
+    splitChunks: aiStats.splitChunks || 0,
+    truncatedChunks: aiStats.truncatedChunks || 0,
     truncated: aiStats.truncated,
     elapsedMs: aiStats.elapsedMs,
     stopReason: aiStats.stopReason,

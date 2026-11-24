@@ -2,7 +2,7 @@
 
 import { ensureReviewStates } from '../core/reviewState.js';
 import { checkAvailability } from '../ai/ollamaClient.js';
-import { runAiDetection, createAiStats, estimateChunks, DEFAULT_MAX_CHUNKS } from '../ai/aiDetect.js';
+import { runAiDetection, createAiStats, estimateChunks, describeIncomplete, DEFAULT_MAX_CHUNKS } from '../ai/aiDetect.js';
 import { AiRunLifecycle } from '../ai/lifecycle.js';
 import { $, toast, showError, announce, setWorkflowStep } from './dom.js';
 
@@ -217,7 +217,7 @@ export class AiController {
       announce('AI 탐지를 중단했습니다.');
     } else {
       this.setBadge('off', 'AI 미완료');
-      toast('AI 탐지가 끝까지 완료되지 않았습니다. 결과에 기록됩니다.', true);
+      toast(`AI 탐지가 끝까지 완료되지 않았습니다. ${describeIncomplete(this.stats)}. 결과에 기록됩니다.`, true);
       announce('AI 탐지가 완료되지 않았습니다.');
     }
   }

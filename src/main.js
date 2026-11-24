@@ -17,6 +17,7 @@ import { $, $$, toast, showError, showScreen, escapeHtml } from './ui/dom.js';
 import { buildPreviewHtml } from './ui/highlight.js';
 import { renderAfterHtml, renderSummaryHtml, renderSummaryDetailHtml, renderDocMeta } from './ui/render.js';
 import { loadStoredPolicies } from './ui/storage.js';
+import { describeIncomplete } from './ai/aiDetect.js';
 import { linkScroll } from './ui/syncScroll.js';
 import { AiController } from './ui/aiController.js';
 import { ReviewController } from './ui/reviewController.js';
@@ -319,11 +320,8 @@ async function executeDeidentify() {
     // AI 미완료 경고 — 완료된 것으로 오인하면 유출로 이어진다
     const aiWarn = $('#ai-incomplete-warning');
     if (aiStats && !aiStats.completed) {
-      const reason = aiStats.stopReason === 'aborted'
-        ? '사용자가 중단'
-        : (aiStats.stopReason === 'offline' ? 'AI 엔진 연결 끊김' : '일부 구간 실패');
       aiWarn.innerHTML = `⚠ <strong>AI 검사가 완료되지 않았습니다.</strong> `
-        + `${escapeHtml(reason)} · ${aiStats.chunksCompleted}/${aiStats.chunksPlanned} 구간만 검사했습니다. `
+        + `${escapeHtml(describeIncomplete(aiStats))} · ${aiStats.chunksCompleted}/${aiStats.chunksPlanned} 구간을 끝까지 검사했습니다. `
         + '검사하지 않은 구간에 개인정보가 남아 있을 수 있습니다.';
       aiWarn.hidden = false;
     } else {

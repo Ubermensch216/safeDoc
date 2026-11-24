@@ -73,13 +73,51 @@ export async function checkAvailability({ endpoint = DEFAULT_ENDPOINT, model = D
   return { available: true, version, models, model };
 }
 
+// 출력이 중간에 잘린 JSON에서 이미 완성된 배열 항목만 건져 낸다.
+// 컨텍스트 창(입력+출력 합계)이 모자라면 모델은 항목 중간에서 멈추는데,
+// 앞쪽 항목은 멀쩡하므로 통째로 버리면 그 구간의 탐지가 모두 사라진다.
+export function salvageArray(content, key) {
+  const keyAt = content.indexOf(`"${key}"`);
+  const open = keyAt < 0 ? -1 : content.indexOf('[', keyAt);
+  if (open < 0) return [];
+
+  const items = [];
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let objStart = -1;
+  for (let i = open + 1; i < content.length; i++) {
+    const ch = content[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') {
+      if (depth === 0) objStart = i;
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0 && objStart >= 0) {
+        try { items.push(JSON.parse(content.slice(objStart, i + 1))); } catch { /* 깨진 항목은 버린다 */ }
+        objStart = -1;
+      }
+    } else if (ch === ']' && depth === 0) break;
+  }
+  return items;
+}
+
 // 구조화 출력 요청 공통 처리
+// arrayKey: 결과 배열의 이름. 출력이 잘렸을 때 완성된 항목만 건지는 데 쓴다.
 async function chatJson(systemPrompt, userMessage, schema, {
   endpoint = DEFAULT_ENDPOINT,
   model = DEFAULT_MODEL,
   signal,
   numCtx = 4096,
   numPredict = 1024,
+  arrayKey = null,
 } = {}) {
   const body = {
     model,
@@ -135,16 +173,25 @@ async function chatJson(systemPrompt, userMessage, schema, {
     throw new AiError('response', 'AI 응답 형식이 올바르지 않습니다.');
   }
 
+  // done_reason이 length이면 모델이 끝까지 쓰지 못하고 잘렸다 (출력 상한 또는 컨텍스트 소진)
+  const truncated = payload.done_reason === 'length';
+
   let parsed;
   try {
     parsed = JSON.parse(content);
   } catch {
-    // 구조화 출력을 강제해도 드물게 깨질 수 있다. 해당 청크만 건너뛴다.
-    throw new AiError('response', 'AI가 올바른 형식으로 답하지 않았습니다.');
+    // 잘린 응답은 완성된 항목만 건진다. 호출자가 구간을 나눠 다시 물을 수 있도록 truncated로 알린다.
+    if (truncated && arrayKey) {
+      parsed = { [arrayKey]: salvageArray(content, arrayKey) };
+    } else {
+      // 구조화 출력을 강제해도 드물게 깨질 수 있다. 해당 청크만 건너뛴다.
+      throw new AiError('response', 'AI가 올바른 형식으로 답하지 않았습니다.');
+    }
   }
 
   return {
     data: parsed,
+    truncated,
     metrics: {
       totalDurationMs: Math.round((payload.total_duration || 0) / 1e6),
       promptTokens: payload.prompt_eval_count || 0,
@@ -155,19 +202,21 @@ async function chatJson(systemPrompt, userMessage, schema, {
 
 // 1단계: 규칙 결과를 보여주지 않고 백지 상태로 탐지한다.
 // (규칙 결과를 함께 주면 모델이 그 목록에 앵커링되어 새 항목을 찾지 못한다 — prompt.js 주석 참고)
+// truncated가 true이면 응답이 잘렸다는 뜻이며 items는 그 앞부분만 담고 있다.
 export async function detectChunk(chunkText, options = {}) {
-  const { data, metrics } = await chatJson(
-    DETECT_SYSTEM_PROMPT, buildDetectMessage(chunkText), DETECT_SCHEMA, options,
+  const { data, metrics, truncated } = await chatJson(
+    DETECT_SYSTEM_PROMPT, buildDetectMessage(chunkText), DETECT_SCHEMA,
+    { ...options, arrayKey: 'items' },
   );
-  return { items: Array.isArray(data?.items) ? data.items : [], metrics };
+  return { items: Array.isArray(data?.items) ? data.items : [], metrics, truncated };
 }
 
 // 2단계: 오탐이 의심되는 후보만 좁혀서 검증한다.
 export async function verifyChunk(chunkText, values, options = {}) {
-  if (!values || values.length === 0) return { judgements: [], metrics: null };
-  const { data, metrics } = await chatJson(
+  if (!values || values.length === 0) return { judgements: [], metrics: null, truncated: false };
+  const { data, metrics, truncated } = await chatJson(
     VERIFY_SYSTEM_PROMPT, buildVerifyMessage(chunkText, values), VERIFY_SCHEMA,
-    { ...options, numPredict: 700 },
+    { ...options, numPredict: 700, arrayKey: 'judgements' },
   );
-  return { judgements: Array.isArray(data?.judgements) ? data.judgements : [], metrics };
+  return { judgements: Array.isArray(data?.judgements) ? data.judgements : [], metrics, truncated };
 }
