@@ -70,4 +70,38 @@ describe('탐지엔진 통합', () => {
     const result = detectAll(text);
     expect(types(result)).toContain('BIRTH_DATE');
   });
+
+  it('국제전화·밑줄·구술·앞자리 0 탈락 휴대전화 표기를 탐지한다', () => {
+    resetIdCounter();
+    const text = [
+      '국제전화: +82-10-9876-5432',
+      '국가번호: (+82) 10 1234 5678',
+      '야간 연락처: 010_5555_6666',
+      '대체 연락처: 공일공 구팔칠육 오사삼이',
+      '숫자셀 연락처: 1098765432',
+    ].join('\n');
+    const phones = detectAll(text).filter((c) => c.type === 'PHONE_MOBILE').map((c) => c.originalText);
+    expect(phones).toEqual(expect.arrayContaining([
+      '+82-10-9876-5432',
+      '(+82) 10 1234 5678',
+      '010_5555_6666',
+      '공일공 구팔칠육 오사삼이',
+      '1098765432',
+    ]));
+  });
+
+  it('문장 속 2글자 성명(이든)과 외국인 성명을 탐지하고 서술어는 오탐하지 않는다', () => {
+    resetIdCounter();
+    const text = [
+      '배석자는 이든이었다.',
+      '이후 응우옌 티 흐엉 씨가 방문하였다.',
+      '통역은 제임스 카터가 맡았으며 처리자 이름은 무함마드 라시드였고 동행인 왕리메이는 돌아갔다.',
+      '성함은 밝히지 않으셨다.',
+    ].join('\n');
+    const names = detectAll(text).filter((c) => c.type === 'PERSON_NAME').map((c) => c.originalText);
+    expect(names).toEqual(expect.arrayContaining([
+      '이든', '응우옌 티 흐엉', '제임스 카터', '무함마드 라시드', '왕리메이',
+    ]));
+    expect(names.some((n) => n.includes('밝히지'))).toBe(false);
+  });
 });

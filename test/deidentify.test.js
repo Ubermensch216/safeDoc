@@ -11,6 +11,10 @@ describe('마스킹 규칙 (기술명세서 Ⅶ-1)', () => {
   });
   it('전화번호 부분 마스킹: 가운데 그룹', () => {
     expect(maskPartial('PHONE_MOBILE', '010-1234-5678')).toBe('010-****-5678');
+    expect(maskPartial('PHONE_MOBILE', '+82-10-9876-5432')).toBe('+82-10-****-5432');
+    expect(maskPartial('PHONE_MOBILE', '010_5555_6666')).toBe('010_****_6666');
+    expect(maskPartial('PHONE_MOBILE', '1098765432')).toBe('10****5432');
+    expect(maskPartial('PHONE_MOBILE', '공일공 구팔칠육 오사삼이')).toBe('공일공 **** 오사삼이');
   });
   it('이메일 부분 마스킹', () => {
     expect(maskPartial('EMAIL', 'example@domain.com')).toBe('ex*****@domain.com');

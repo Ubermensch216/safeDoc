@@ -3,7 +3,7 @@
 import { validateRRN, validateForeignerNo } from '../validators.js';
 import { fieldKeywordScore, digitBoundaryPenalty, makeCandidate } from './helpers.js';
 
-const RRN_REGEX = /\d{6}[-\s]?\d{7}/g;
+const RRN_REGEX = /\d{6}(?:[ \t]*-[ \t]*|\s)?\d{7}/g;
 
 export function detectRRN(text) {
   const results = [];

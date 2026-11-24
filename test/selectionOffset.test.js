@@ -15,7 +15,7 @@ describe('미리보기 선택 위치 변환', () => {
     expect(renderedOffsetToSource(text, 0, renderedStart + 4)).toBe(sourceStart + 4);
   });
 
-  it('CSV fixture의 영일이삼 선택이 기존 후보와 겹치지 않는다', () => {
+  it('CSV fixture의 비후보 구간 선택이 기존 후보와 겹치지 않는다', () => {
     const documentsUrl = new URL('./fixtures/documents/', import.meta.url);
     const fixtureName = readdirSync(documentsUrl).find((name) => name.startsWith('04_'));
     const bytes = readFileSync(new URL(fixtureName, documentsUrl));
@@ -23,7 +23,7 @@ describe('미리보기 선택 위치 변환', () => {
     const parsed = parseCsv(buffer);
     const candidates = analyze(parsed, []);
 
-    const targetText = '영일이삼';
+    const targetText = '한글 숫자 표기';
     const sourceStart = parsed.text.indexOf(targetText);
     const renderedText = parsed.text.replace(/\r\n/g, '\n');
     const renderedStart = renderedText.indexOf(targetText);

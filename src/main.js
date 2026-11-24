@@ -1,30 +1,26 @@
-// 앱 진입점 — 화면 전환·이벤트 연결 (개인정보 원문은 콘솔·저장소에 기록하지 않는다)
+// 앱 진입점 — 화면 전환·세션 오케스트레이션 (개인정보 원문은 콘솔·저장소에 기록하지 않는다)
 
 import './style.css';
 import brandLogoUrl from './assets/safedoc-logo.png';
 import { PROGRAM_NAME, PROGRAM_VERSION } from './version.js';
 import { RULE_VERSION } from './detect/engine.js';
-import { PII_TYPES, ACTION_LABELS, CONFIDENCE_LEVELS } from './detect/types.js';
+import { PII_TYPES, ACTION_LABELS } from './detect/types.js';
 import { WorkSession } from './core/session.js';
-import {
-  REVIEW_STATES,
-  ensureReviewStates,
-  reviewCounts,
-  setReviewState,
-} from './core/reviewState.js';
+import { REVIEW_STATES, ensureReviewStates, reviewCounts } from './core/reviewState.js';
 import { validateAndRead, downloadBlob, resultFileName } from './core/fileManager.js';
-import { parseDocument, analyze, buildResult, restoreDocument } from './core/analyzer.js';
+import { parseDocument, analyze, buildResult } from './core/analyzer.js';
 import { applyToText } from './core/deidentify.js';
-import { buildMappingTable, mappingTableToBlob, parseMappingTable } from './core/mappingTable.js';
+import { buildMappingTable, mappingTableToBlob } from './core/mappingTable.js';
 import { buildSummary, summaryToBlob } from './core/summary.js';
 import { AppError } from './core/errors.js';
-import { checkAvailability, DEFAULT_ENDPOINT, DEFAULT_MODEL } from './ai/ollamaClient.js';
-import { runAiDetection, createAiStats, estimateChunks, DEFAULT_MAX_CHUNKS } from './ai/aiDetect.js';
-import { AiRunLifecycle } from './ai/lifecycle.js';
-import { $, $$, toast, showScreen, textOffsetIn, renderedOffsetToSource, escapeHtml } from './ui/dom.js';
-import { CandidateListView } from './ui/candidateList.js';
-import { PreviewHighlighter, buildPreviewHtml } from './ui/highlight.js';
+import { $, $$, toast, showError, showScreen, escapeHtml } from './ui/dom.js';
+import { buildPreviewHtml } from './ui/highlight.js';
 import { renderAfterHtml, renderSummaryHtml, renderDocMeta } from './ui/render.js';
+import { loadStoredPolicies } from './ui/storage.js';
+import { AiController } from './ui/aiController.js';
+import { ReviewController } from './ui/reviewController.js';
+import { bindRestoreEvents } from './ui/restoreController.js';
+import { createSettingsController } from './ui/settingsController.js';
 
 // 배포판은 단일 HTML만 서빙하므로 로고도 번들 안의 data URL로 주입한다.
 // 같은 소스를 배너와 브라우저/홈 화면 아이콘에 사용해 실행 경로에 영향을 받지 않게 한다.
@@ -32,23 +28,11 @@ for (const logo of document.querySelectorAll('.brand-logo')) logo.src = brandLog
 for (const icon of document.querySelectorAll('[data-brand-icon]')) icon.href = brandLogoUrl;
 
 const session = new WorkSession();
-let userRules = [];          // 사용자 정의 탐지 규칙 (세션 한정, FR-803)
 let analyzeCancelled = false;
-let manualSeq = 0;
 
-let listView = null;
-let highlighter = null;
-let activeFilter = { type: null, status: 'all' };
-
-// AI 상태
-const aiLifecycle = new AiRunLifecycle(); // 이전 문서의 비동기 실행을 현재 세션과 격리
-let aiStats = null;          // 감사 기록용 통계
-let aiAvailability = { available: false, reason: 'unknown' };
-
-const POLICY_STORAGE_KEY = 'safedoc-type-policies';
-const AI_STORAGE_KEY = 'safedoc-ai-settings';
-
-let aiSettings = { enabled: true, endpoint: DEFAULT_ENDPOINT, model: DEFAULT_MODEL };
+let review = null;
+let ai = null;
+let settings = null;
 
 // ---------- 초기화 ----------
 
@@ -56,58 +40,50 @@ function init() {
   $('#version-info').textContent = `v${PROGRAM_VERSION} · 규칙 v${RULE_VERSION}`;
   document.title = PROGRAM_NAME;
 
-  listView = new CandidateListView($('#candidate-list'));
-  highlighter = new PreviewHighlighter($('#preview'), { onWindowChange: updatePreviewWindowUi });
+  loadStoredPolicies(session.typePolicies);
 
-  loadPolicies();
-  loadAiSettings();
+  review = new ReviewController({
+    session,
+    onOpenConfirm: () => {
+      renderConfirmScreen();
+      showScreen('screen-confirm');
+    },
+    onCancelAnalyze: () => { analyzeCancelled = true; },
+    onCancelAi: async () => {
+      await ai.stop({ wait: true });
+      ai.setBadge('off', 'AI 중단됨');
+      toast('AI 탐지를 중단했습니다. 규칙 기반 결과는 그대로 유지됩니다.');
+    },
+  });
+
+  settings = createSettingsController({
+    session,
+    onPoliciesChanged: () => {
+      review.setPolicies(session.typePolicies);
+      if (session.parsed) review.sync();
+    },
+    onAiSettingsChanged: () => ai.refreshAvailability(),
+  });
+
+  ai = new AiController({
+    session,
+    getSettings: () => settings.getAiSettings(),
+    onSyncReview: (opts) => review.sync(opts),
+    onSchedulePreview: (text, candidates) => review.schedulePreview(text, candidates),
+    onRenderPreviewNow: (text, candidates) => review.renderPreviewNow(text, candidates),
+  });
+
+  review.setPolicies(session.typePolicies);
   populateSelects();
-  renderPolicyList();
+
+  review.bind();
+  settings.bind();
   bindTabEvents();
   bindUploadEvents();
-  bindReviewEvents();
-  bindKeyboard();
-  bindResultEvents();
+  bindConfirmAndResultEvents();
   bindRestoreEvents();
-  bindSettingsEvents();
-  bindSettingsNavigation();
 
-  refreshAiAvailability();
-}
-
-function loadPolicies() {
-  try {
-    const raw = localStorage.getItem(POLICY_STORAGE_KEY);
-    if (raw) {
-      const saved = JSON.parse(raw);
-      for (const [type, action] of Object.entries(saved)) {
-        // 저장된 값이 유효한 처리방식일 때만 반영한다
-        if (session.typePolicies[type] && ACTION_LABELS[action]) session.typePolicies[type] = action;
-      }
-    }
-  } catch { /* 설정 손상 시 기본값 사용 */ }
-  listView?.setPolicies(session.typePolicies);
-}
-
-function savePolicies() {
-  try {
-    localStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify(session.typePolicies));
-  } catch { /* 저장 실패는 무시 */ }
-}
-
-// AI 설정에는 개인정보가 포함되지 않는다 (FR-805)
-function loadAiSettings() {
-  try {
-    const raw = localStorage.getItem(AI_STORAGE_KEY);
-    if (raw) aiSettings = { ...aiSettings, ...JSON.parse(raw) };
-  } catch { /* 무시 */ }
-  $('#ai-enabled').checked = aiSettings.enabled;
-  $('#ai-endpoint').value = aiSettings.endpoint;
-  $('#ai-model').value = aiSettings.model;
-}
-
-function saveAiSettings() {
-  try { localStorage.setItem(AI_STORAGE_KEY, JSON.stringify(aiSettings)); } catch { /* 무시 */ }
+  ai.refreshAvailability();
 }
 
 function populateSelects() {
@@ -120,40 +96,9 @@ function populateSelects() {
   $('#add-type').value = 'CUSTOM';
 
   $('#type-filter').innerHTML = `<option value="">전체 유형</option>${options}`;
-
   $('#bulk-action').innerHTML = Object.entries(ACTION_LABELS)
     .map(([code, label]) => `<option value="${code}">${escapeHtml(label)}</option>`)
     .join('');
-}
-
-// ---------- AI 상태 ----------
-
-function setAiBadge(state, text) {
-  const badge = $('#ai-badge');
-  badge.className = `security-state ${state}`;
-  $('#ai-badge-text').textContent = text;
-  const settingsState = $('#settings-ai-state');
-  if (settingsState) settingsState.textContent = text;
-}
-
-async function refreshAiAvailability() {
-  // https로 열린 경우(GitHub Pages 등)에는 로컬 엔진에 접근할 수 없다
-  if (location.protocol === 'https:') {
-    aiAvailability = { available: false, reason: 'protocol', message: '웹에서 열람 중이라 로컬 AI를 사용할 수 없습니다.' };
-    setAiBadge('off', 'AI 사용 불가 (웹 열람)');
-    return;
-  }
-  if (!aiSettings.enabled) {
-    aiAvailability = { available: false, reason: 'disabled' };
-    setAiBadge('off', 'AI 사용 안 함');
-    return;
-  }
-
-  setAiBadge('busy', 'AI 확인 중…');
-  aiAvailability = await checkAvailability({ endpoint: aiSettings.endpoint, model: aiSettings.model });
-  if (aiAvailability.available) setAiBadge('on', `AI 준비됨 · ${aiSettings.model}`);
-  else if (aiAvailability.reason === 'model') setAiBadge('off', '모델 없음');
-  else setAiBadge('off', 'AI 엔진 꺼짐');
 }
 
 // ---------- 탭 전환 ----------
@@ -167,6 +112,7 @@ function activateTab(btn, { focus = false } = {}) {
   });
   $$('.tab-panel').forEach((p) => p.classList.remove('active'));
   $(`#tab-${btn.dataset.tab}`).classList.add('active');
+
   const titles = {
     deidentify: ['비식별 작업', session.parsed ? '개인정보 검토' : '새 비식별 작업'],
     restore: ['도구', '원본 복원'],
@@ -188,7 +134,7 @@ function bindTabEvents() {
   });
 }
 
-// ---------- 업로드 (FR-101, FR-102) ----------
+// ---------- 업로드 및 분석 (FR-101, FR-102) ----------
 
 function bindUploadEvents() {
   const dropZone = $('#drop-zone');
@@ -219,12 +165,13 @@ async function handleFile(file) {
     $('#file-input').value = '';
     return;
   }
-  stopAiPass();
-  resetReviewUi();
+  ai.stop();
+  resetWorkUi();
   session.reset();
-  loadPolicies();
+  loadStoredPolicies(session.typePolicies);
+  review.setPolicies(session.typePolicies);
   analyzeCancelled = false;
-  aiStats = null;
+  ai.resetStats();
 
   try {
     const read = await validateAndRead(file);
@@ -260,15 +207,6 @@ function setProgress(percent, statusText) {
   });
 }
 
-// 보조기술 전용 알림. 토스트와 달리 화면에는 나타나지 않는다.
-function announce(message) {
-  const region = $('#live-region');
-  if (!region) return;
-  region.textContent = '';
-  // 같은 문구가 연속으로 오면 읽지 않는 판독기가 있어 한 틱 비운 뒤 넣는다
-  setTimeout(() => { region.textContent = message; }, 50);
-}
-
 // 분석 실행 — 단계 사이에 제어권을 양보하여 화면 멈춤 방지 (NFR-104)
 async function runAnalysis() {
   const yieldUi = () => new Promise((r) => setTimeout(r, 30));
@@ -282,21 +220,19 @@ async function runAnalysis() {
     await yieldUi();
     if (analyzeCancelled) throw new AppError('E010');
 
-    session.candidates = analyze(session.parsed, userRules);
+    session.candidates = analyze(session.parsed, settings.getUserRules());
     ensureReviewStates(session.candidates);
     setProgress(100, '탐지 완료');
     await yieldUi();
     if (analyzeCancelled) throw new AppError('E010');
 
-    // 파일정보 표시 (FR-104)
     $('#doc-meta').innerHTML = renderDocMeta(session.file, session.parsed);
-
-    highlighter.renderNow(session.parsed.text, session.candidates);
-    syncReview({ resort: true });
+    review.renderPreviewNow(session.parsed.text, session.candidates);
+    review.sync({ resort: true });
     showScreen('screen-review');
 
     // 규칙 결과를 먼저 보여준 뒤 AI 탐지를 백그라운드로 시작한다 (계획 C-7)
-    startAiPass();
+    ai.startPass();
   } catch (err) {
     showError(err);
     session.dispose();
@@ -304,599 +240,7 @@ async function runAnalysis() {
   }
 }
 
-// ---------- 검토 화면 ----------
-
-function syncReview({ resort = false } = {}) {
-  listView.setPolicies(session.typePolicies);
-  listView.setFilter(activeFilter);
-  const visible = listView.sync(session.candidates, { resort });
-
-  const counts = reviewCounts(session.candidates);
-  const reviewed = counts.process + counts.exclude;
-  const badge = $('#detect-count-badge');
-  badge.textContent = `${visible}건 표시`;
-  badge.setAttribute('aria-label', `총 ${counts.total}건 중 ${visible}건 표시`);
-
-  $('#review-done-count').textContent = reviewed.toLocaleString();
-  $('#review-total-count').textContent = `/ ${counts.total.toLocaleString()}`;
-  $('#review-meter-fill').style.width = `${counts.total ? reviewed / counts.total * 100 : 100}%`;
-  $('#count-pending').textContent = counts.pending.toLocaleString();
-  $('#count-process').textContent = counts.process.toLocaleString();
-  $('#count-exclude').textContent = counts.exclude.toLocaleString();
-  const aiCount = session.candidates.filter((c) => c.aiOnly).length;
-  const disputedCount = session.candidates.filter((c) => c.aiDisputed).length;
-  const manualCount = session.candidates.filter((c) => ['MANUAL', 'SEARCH'].includes(c.detectionMethod)).length;
-  $('#count-ai').textContent = aiCount.toLocaleString();
-  $('#filter-count-all').textContent = counts.total;
-  $('#filter-count-pending').textContent = counts.pending;
-  $('#filter-count-ai').textContent = aiCount;
-  $('#filter-count-disputed').textContent = disputedCount;
-  $('#filter-count-exclude').textContent = counts.exclude;
-  $('#filter-count-manual').textContent = manualCount;
-  $('#review-footer-summary').innerHTML = `<strong>${counts.process.toLocaleString()}개 처리</strong> · ${counts.exclude.toLocaleString()}개 제외 · ${counts.pending.toLocaleString()}개 미확인`;
-  $('#btn-to-confirm').disabled = counts.pending > 0;
-
-  const filtered = activeFilter.type || activeFilter.status !== 'all';
-  $('#filter-actions').hidden = !filtered;
-  if (filtered) {
-    const statusLabels = { pending: '확인 필요', ai: 'AI 발견', disputed: '오탐 의심', exclude: '처리 제외', manual: '수동 추가' };
-    const label = activeFilter.type ? (PII_TYPES[activeFilter.type]?.label || activeFilter.type) : statusLabels[activeFilter.status];
-    $('#filter-label').textContent = `${label} ${visible}건`;
-  }
-
-  updateReviewGap();
-}
-
-// 판단이 갈리는 항목을 손대지 않은 채 실행하면, 확인 체크박스 하나로 전부 통과한다.
-// 무엇이 남아 있는지 실행 직전에 눈에 보이게 한다.
-function reviewGaps() {
-  const pending = session.candidates.filter((c) => c.reviewState === REVIEW_STATES.PENDING);
-  const disputed = session.candidates.filter((c) => c.aiDisputed && !c.userModified);
-  const lowConf = session.candidates.filter(
-    (c) => c.confidence < CONFIDENCE_LEVELS.MEDIUM && !c.userModified,
-  );
-  return { pending, disputed, lowConf };
-}
-
-function updateReviewGap() {
-  const box = $('#review-gap');
-  const { pending, disputed, lowConf } = reviewGaps();
-  const parts = [];
-  if (pending.length > 0) parts.push(`<strong>미확인 ${pending.length}건</strong>`);
-  if (disputed.length > 0) parts.push(`<strong>AI 오탐 의심 ${disputed.length}건</strong>`);
-  if (lowConf.length > 0) parts.push(`<strong>신뢰도 낮음 ${lowConf.length}건</strong>`);
-
-  if (parts.length === 0) { box.hidden = true; return; }
-  box.hidden = false;
-  box.innerHTML = `${parts.join(' · ')}이 아직 확인되지 않았습니다. `
-    + '위 필터로 해당 항목만 모아 볼 수 있습니다. 확인 후 실행하십시오.';
-}
-
-function updatePreviewWindowUi({ start, end, total }) {
-  const paged = total > 200000;
-  const info = $('#preview-window-info');
-  const prev = $('#btn-preview-prev');
-  const next = $('#btn-preview-next');
-  info.hidden = !paged;
-  prev.hidden = !paged;
-  next.hidden = !paged;
-  if (!paged) return;
-  info.textContent = `${(start + 1).toLocaleString()}~${end.toLocaleString()} / ${total.toLocaleString()}자`;
-  prev.disabled = start === 0;
-  next.disabled = end >= total;
-}
-
-function pushHistory() {
-  // 되돌리기용 스냅샷 (FR-409) — 메모리에서만 유지
-  // 후보 배열뿐 아니라 수동 추가 카운터까지 담아야 요약 통계가 어긋나지 않는다
-  session.history.push(JSON.stringify({
-    candidates: session.candidates,
-    manuallyAddedCount: session.manuallyAddedCount,
-    manualSeq,
-  }));
-  if (session.history.length > 50) session.history.shift();
-}
-
-function findCandidate(id) {
-  return session.candidates.find((c) => c.id === id);
-}
-
-// 사용자가 손댄 후보는 AI 병합이 범위를 바꾸지 않는다
-function markUserModified(c) {
-  c.userModified = true;
-}
-
-function bindReviewEvents() {
-  $('#btn-preview-prev').addEventListener('click', () => highlighter.shiftWindow(-1));
-  $('#btn-preview-next').addEventListener('click', () => highlighter.shiftWindow(1));
-
-  // 미리보기에서 후보 클릭 → 목록에서 해당 항목으로 이동
-  const jumpToCandidate = (mark) => {
-    highlighter.focus(mark.dataset.id);
-    listView.setCursor(mark.dataset.id, session.candidates);
-  };
-
-  $('#preview').addEventListener('click', (e) => {
-    const mark = e.target.closest('mark.pii');
-    if (mark) jumpToCandidate(mark);
-  });
-
-  // 강조는 role="button"이므로 Enter·Space로도 동작해야 한다
-  $('#preview').addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' && e.key !== ' ') return;
-    const mark = e.target.closest?.('mark.pii');
-    if (!mark) return;
-    e.preventDefault();
-    jumpToCandidate(mark);
-  });
-
-  const list = $('#candidate-list');
-
-  list.addEventListener('click', (e) => {
-    const item = e.target.closest('.cand');
-    if (!item) return;
-    const c = findCandidate(item.dataset.id);
-    if (!c) return;
-
-    if (e.target.classList.contains('c-same')) {
-      // 동일값 일괄 (FR-406)
-      pushHistory();
-      const targetState = c.reviewState === REVIEW_STATES.PROCESS ? REVIEW_STATES.EXCLUDE : REVIEW_STATES.PROCESS;
-      let count = 0;
-      for (const other of session.candidates) {
-        if (other.originalText === c.originalText && other.type === c.type) {
-          setReviewState(other, targetState);
-          other.action = c.action;
-          count += 1;
-        }
-      }
-      syncReview();
-      toast(`동일한 값 ${count}건을 ${targetState === REVIEW_STATES.PROCESS ? '처리 대상으로 지정' : '제외'}했습니다.`);
-      return;
-    }
-
-    if (e.target.classList.contains('cand-toggle')) {
-      listView.toggleExpanded(c.id);
-      syncReview();
-      return;
-    }
-
-    if (e.target.classList.contains('c-decision')) {
-      pushHistory();
-      setReviewState(c, e.target.dataset.state);
-      syncReview();
-      return;
-    }
-
-    // 카드 클릭 → 커서 이동 + 미리보기 위치로 스크롤
-    if (e.target.tagName !== 'SELECT') {
-      listView.setCursor(c.id, session.candidates);
-      highlighter.focus(c.id);
-    }
-  });
-
-  list.addEventListener('change', (e) => {
-    const item = e.target.closest('.cand');
-    if (!item) return;
-    const c = findCandidate(item.dataset.id);
-    if (!c) return;
-    if (e.target.classList.contains('c-type')) {
-      // 유형 변경 (FR-405)
-      pushHistory();
-      c.type = e.target.value;
-      c.action = null; // 새 유형의 기본 정책 적용
-      markUserModified(c);
-      syncReview();
-    } else if (e.target.classList.contains('c-action')) {
-      // 개별 처리방식 (FR-407)
-      pushHistory();
-      c.action = e.target.value;
-      markUserModified(c);
-      syncReview();
-    }
-  });
-
-  $('#status-filters').addEventListener('click', (e) => {
-    const button = e.target.closest('.status-filter');
-    if (!button) return;
-    activeFilter.status = button.dataset.status;
-    $$('.status-filter').forEach((item) => {
-      const active = item === button;
-      item.classList.toggle('active', active);
-      item.setAttribute('aria-pressed', String(active));
-    });
-    syncReview();
-  });
-
-  $('#type-filter').addEventListener('change', (e) => {
-    activeFilter.type = e.target.value || null;
-    syncReview();
-  });
-
-  // 필터된 항목 일괄 처리 (FR-406: 동일 유형 전체 일괄)
-  $('#filter-actions').addEventListener('click', (e) => {
-    const action = e.target.dataset.bulk;
-    if (!action) return;
-    if (action === 'clear') {
-      activeFilter = { type: null, status: 'all' };
-      $('#type-filter').value = '';
-      $$('.status-filter').forEach((item) => {
-        const active = item.dataset.status === 'all';
-        item.classList.toggle('active', active);
-        item.setAttribute('aria-pressed', String(active));
-      });
-      syncReview();
-      return;
-    }
-    pushHistory();
-    const targets = session.candidates.filter((c) => listView.isVisible(c));
-    for (const c of targets) {
-      setReviewState(c, action === 'process' ? REVIEW_STATES.PROCESS : REVIEW_STATES.EXCLUDE);
-    }
-    syncReview();
-    toast(`${targets.length}건을 ${action === 'process' ? '처리 대상으로 지정' : '제외'}했습니다.`);
-  });
-
-  $('#bulk-action').addEventListener('change', (e) => {
-    pushHistory();
-    const targets = session.candidates.filter((c) => listView.isVisible(c));
-    for (const c of targets) {
-      c.action = e.target.value;
-      markUserModified(c);
-    }
-    syncReview();
-    toast(`${targets.length}건의 처리방식을 변경했습니다.`);
-  });
-
-  $('#sort-mode').addEventListener('change', (e) => {
-    listView.setSort(e.target.value);
-    syncReview({ resort: true });
-  });
-
-  $('#btn-select-all').addEventListener('click', () => {
-    pushHistory();
-    session.candidates.forEach((c) => setReviewState(c, REVIEW_STATES.PROCESS));
-    syncReview();
-  });
-  $('#btn-deselect-all').addEventListener('click', () => {
-    pushHistory();
-    session.candidates.forEach((c) => setReviewState(c, REVIEW_STATES.EXCLUDE));
-    syncReview();
-  });
-
-  // 검색 일괄 지정 (FR-408)
-  $('#btn-search-add').addEventListener('click', () => {
-    const term = $('#search-input').value;
-    if (!term) {
-      toast('검색할 문자열을 입력하십시오.', true);
-      return;
-    }
-    pushHistory();
-    const added = addCandidatesByText(term, $('#search-type').value, 'SEARCH');
-    syncReview();
-    highlighter.renderNow(session.parsed.text, session.candidates);
-    toast(added > 0 ? `"${term}" ${added}건을 개인정보로 지정했습니다.` : '이미 지정되었거나 문서에 없는 문자열입니다.', added === 0);
-  });
-
-  // 선택 영역 수동 추가 (FR-404)
-  $('#btn-add-selection').addEventListener('click', () => {
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed) {
-      toast('미리보기에서 추가할 문자열을 먼저 드래그하십시오.', true);
-      return;
-    }
-    const preview = $('#preview');
-    if (!preview.contains(sel.anchorNode) || !preview.contains(sel.focusNode)) {
-      toast('문서 미리보기 안의 문자열만 추가할 수 있습니다.', true);
-      return;
-    }
-    let start = textOffsetIn(preview, sel.anchorNode, sel.anchorOffset);
-    let end = textOffsetIn(preview, sel.focusNode, sel.focusOffset);
-    if (start < 0 || end < 0) return;
-    if (start > end) [start, end] = [end, start];
-    if (start === end) return;
-    start = renderedOffsetToSource(session.parsed.text, highlighter.windowStart, start);
-    end = renderedOffsetToSource(session.parsed.text, highlighter.windowStart, end);
-
-    pushHistory();
-    const ok = addManualCandidate(start, end, $('#add-type').value);
-    sel.removeAllRanges();
-    syncReview();
-    highlighter.renderNow(session.parsed.text, session.candidates);
-    toast(ok ? '개인정보로 추가했습니다.' : '기존 후보와 겹치는 영역입니다.', !ok);
-    $('#selection-popover').hidden = true;
-  });
-
-  const updateSelectionPopover = () => {
-    const selection = window.getSelection();
-    const preview = $('#preview');
-    $('#selection-popover').hidden = !selection || selection.isCollapsed
-      || !preview.contains(selection.anchorNode) || !preview.contains(selection.focusNode);
-  };
-  $('#preview').addEventListener('mouseup', updateSelectionPopover);
-  $('#preview').addEventListener('keyup', updateSelectionPopover);
-
-  // 되돌리기 (FR-409)
-  $('#btn-undo').addEventListener('click', undo);
-
-  $('#btn-to-confirm').addEventListener('click', () => {
-    const counts = reviewCounts(session.candidates);
-    if (counts.pending > 0) {
-      activeFilter.status = 'pending';
-      syncReview();
-      toast(`미확인 후보 ${counts.pending}건을 먼저 확인해 주십시오.`, true);
-      return;
-    }
-    renderConfirmScreen();
-    showScreen('screen-confirm');
-  });
-  $('#btn-back-review').addEventListener('click', () => showScreen('screen-review'));
-
-  // 최종 확인 후 실행 (FR-410)
-  $('#final-confirm').addEventListener('change', (e) => {
-    $('#btn-execute').disabled = !e.target.checked;
-  });
-  $('#btn-execute').addEventListener('click', executeDeidentify);
-  $('#btn-cancel-analyze').addEventListener('click', () => { analyzeCancelled = true; });
-  $('#btn-cancel-ai').addEventListener('click', async () => {
-    const stoppedStats = await stopAiPass({ wait: true });
-    if (stoppedStats) aiStats = stoppedStats;
-    setAiBadge('off', 'AI 중단됨');
-    toast('AI 탐지를 중단했습니다. 규칙 기반 결과는 그대로 유지됩니다.');
-  });
-}
-
-function undo() {
-  const snapshot = session.history.pop();
-  if (!snapshot) {
-    toast('되돌릴 작업이 없습니다.', true);
-    return;
-  }
-  const state = JSON.parse(snapshot);
-  session.candidates = state.candidates;
-  session.manuallyAddedCount = state.manuallyAddedCount;
-  manualSeq = state.manualSeq;
-  syncReview({ resort: true });
-  highlighter.renderNow(session.parsed.text, session.candidates);
-}
-
-// ---------- 키보드 검토 (계획 D-2) ----------
-
-function bindKeyboard() {
-  document.addEventListener('keydown', (e) => {
-    if (!$('#screen-review').classList.contains('active')) return;
-    if (!$('#tab-deidentify').classList.contains('active')) return;
-    const tag = document.activeElement?.tagName;
-    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-    if (e.ctrlKey || e.altKey || e.metaKey) return;
-
-    const key = e.key.toLowerCase();
-
-    // 미리보기에 포커스가 있으면 방향키는 그 패널의 스크롤이어야 한다.
-    // 여기서 가로채면 키보드만 쓰는 사용자는 문서를 읽을 수 없다.
-    if (document.activeElement === $('#preview')
-        && (key === 'arrowdown' || key === 'arrowup' || key === 'pageup' || key === 'pagedown'
-            || key === 'home' || key === 'end' || key === ' ')) {
-      return;
-    }
-
-    if (key === 'j' || key === 'arrowdown') {
-      e.preventDefault();
-      const id = listView.moveCursor(1, session.candidates);
-      if (id) highlighter.focus(id);
-      return;
-    }
-    if (key === 'k' || key === 'arrowup') {
-      e.preventDefault();
-      const id = listView.moveCursor(-1, session.candidates);
-      if (id) highlighter.focus(id);
-      return;
-    }
-
-    const current = listView.cursorId ? findCandidate(listView.cursorId) : null;
-    if (!current) return;
-
-    if (key === 'i') {
-      e.preventDefault();
-      pushHistory();
-      setReviewState(current, REVIEW_STATES.PROCESS);
-      syncReview();
-      return;
-    }
-    if (key === 'x') {
-      e.preventDefault();
-      pushHistory();
-      setReviewState(current, REVIEW_STATES.EXCLUDE);
-      syncReview();
-      return;
-    }
-    if (key === 'enter') {
-      e.preventDefault();
-      listView.toggleExpanded(current.id);
-      syncReview();
-      return;
-    }
-    if (['1', '2', '3', '4'].includes(key)) {
-      e.preventDefault();
-      const actions = Object.keys(ACTION_LABELS);
-      pushHistory();
-      current.action = actions[Number(key) - 1];
-      markUserModified(current);
-      syncReview();
-      toast(`${ACTION_LABELS[current.action]}(으)로 변경했습니다.`);
-    }
-  });
-}
-
-// ---------- 수동 후보 추가 ----------
-
-function addManualCandidate(start, end, type, method = 'MANUAL') {
-  const overlaps = session.candidates.some((c) => start < c.end && c.start < end);
-  if (overlaps) return false;
-  manualSeq += 1;
-  session.candidates.push({
-    id: `pii-manual-${String(manualSeq).padStart(4, '0')}`,
-    documentPart: 'body',
-    start,
-    end,
-    originalText: session.parsed.text.slice(start, end),
-    type,
-    confidence: 1,
-    detectionMethod: method,
-    context: '',
-    selected: true,
-    reviewState: REVIEW_STATES.PROCESS,
-    action: null,
-    replacementText: null,
-    userModified: true,
-  });
-  session.manuallyAddedCount += 1;
-  return true;
-}
-
-function addCandidatesByText(term, type, method) {
-  const text = session.parsed.text;
-  let added = 0;
-  let idx = text.indexOf(term);
-  while (idx >= 0) {
-    if (addManualCandidate(idx, idx + term.length, type, method)) added += 1;
-    idx = text.indexOf(term, idx + term.length);
-  }
-  return added;
-}
-
-// ---------- AI 탐지 패스 (계획 C-7) ----------
-
-async function stopAiPass({ wait = false } = {}) {
-  const stopped = aiLifecycle.stop({ wait });
-  const statusBox = $('#ai-status');
-  statusBox.hidden = true;
-  statusBox.setAttribute('aria-busy', 'false');
-  return wait ? await stopped : null;
-}
-
-function startAiPass() {
-  if (!aiSettings.enabled) return Promise.resolve(null);
-  const parsed = session.parsed;
-  const candidates = session.candidates;
-  if (!parsed) return Promise.resolve(null);
-
-  const run = aiLifecycle.begin();
-  const initialStats = createAiStats(parsed.text, {
-    model: aiSettings.model,
-    maxChunks: DEFAULT_MAX_CHUNKS,
-  });
-  const promise = performAiPass(run, parsed, candidates, initialStats);
-  return aiLifecycle.attachPromise(run, promise);
-}
-
-async function performAiPass(run, parsed, candidates, initialStats) {
-  await refreshAiAvailability();
-  if (!aiLifecycle.isCurrent(run)) {
-    initialStats.stopReason = 'aborted';
-    return initialStats;
-  }
-  if (!aiAvailability.available) {
-    if (aiAvailability.reason && aiAvailability.reason !== 'disabled') {
-      toast(`${aiAvailability.message || 'AI 탐지를 사용할 수 없습니다.'} 규칙 기반 결과만 표시합니다.`);
-    }
-    aiLifecycle.clear(run);
-    return null;
-  }
-
-  const chunkCount = estimateChunks(parsed.text);
-  if (chunkCount > DEFAULT_MAX_CHUNKS) {
-    const minutes = Math.ceil((chunkCount * 6) / 60);
-    const ok = window.confirm(
-      `문서가 커서 AI 탐지에 약 ${minutes}분 이상 걸립니다 (${chunkCount}개 구간).\n`
-      + `앞쪽 ${DEFAULT_MAX_CHUNKS}개 구간만 검사합니다.\n\n계속하시겠습니까?`,
-    );
-    if (!ok) {
-      aiLifecycle.clear(run);
-      return null;
-    }
-  }
-
-  const controller = new AbortController();
-  aiLifecycle.attachController(run, controller);
-  if (!aiLifecycle.isCurrent(run)) {
-    initialStats.stopReason = 'aborted';
-    return initialStats;
-  }
-  const statusBox = $('#ai-status');
-  statusBox.hidden = false;
-  statusBox.setAttribute('aria-busy', 'true');
-  setAiBadge('busy', 'AI 탐지 중…');
-  updateAiProgress(0, Math.min(chunkCount, DEFAULT_MAX_CHUNKS), 0);
-
-  try {
-    const completedStats = await runAiDetection(parsed, candidates, {
-      endpoint: aiSettings.endpoint,
-      model: aiSettings.model,
-      signal: controller.signal,
-      onChunkMerged: ({ index, total, added, stats }) => {
-        if (!aiLifecycle.isCurrent(run) || session.parsed !== parsed) return;
-        updateAiProgress(index + 1, total, stats.addedCount);
-        ensureReviewStates(added);
-        // 새 후보가 도착했으므로 목록·미리보기를 갱신한다.
-        // sync는 기존 카드를 재사용하므로 스크롤·펼침 상태가 유지된다.
-        syncReview();
-        highlighter.schedule(parsed.text, candidates);
-
-        // 검토를 마쳤다고 체크한 뒤에 새 후보가 나타나면 확인을 다시 받는다
-        if (added.length > 0 && $('#final-confirm').checked) {
-          $('#final-confirm').checked = false;
-          $('#btn-execute').disabled = true;
-          toast(`AI가 개인정보 후보 ${added.length}건을 새로 찾았습니다. 다시 확인해 주십시오.`);
-        }
-      },
-    });
-    if (aiLifecycle.isCurrent(run) && session.parsed === parsed) aiStats = completedStats;
-    return completedStats;
-  } catch (err) {
-    if (aiLifecycle.isCurrent(run)) showError(err);
-    return initialStats;
-  } finally {
-    if (aiLifecycle.isCurrent(run) && session.parsed === parsed) {
-      statusBox.hidden = true;
-      statusBox.setAttribute('aria-busy', 'false');
-      highlighter.renderNow(parsed.text, candidates);
-      // AI 결과가 붙으면서 각 후보의 검토 우선순위가 바뀌었으므로 여기서 한 번 재정렬한다.
-      // 청크마다 재정렬하면 검토 중인 사용자 눈앞에서 카드가 계속 움직인다.
-      // AI 완료는 사용자에게 알리는 discrete 시점이므로 여기가 유일하게 안전한 자리다.
-      syncReview({ resort: true });
-      finishAiPass();
-      aiLifecycle.clear(run);
-    }
-  }
-}
-
-function finishAiPass() {
-  if (!aiStats) { setAiBadge('off', 'AI 사용 안 함'); return; }
-  if (aiStats.completed) {
-    setAiBadge('on', `AI 완료 · ${aiStats.addedCount}건 추가`);
-    if (aiStats.addedCount > 0) {
-      toast(`AI가 규칙이 놓친 개인정보 ${aiStats.addedCount}건을 추가로 찾았습니다.`);
-    }
-    announce(`AI 탐지 완료. ${aiStats.addedCount}건을 추가로 찾았습니다. 후보 총 ${session.candidates.length}건.`);
-  } else if (aiStats.stopReason === 'aborted') {
-    setAiBadge('off', 'AI 중단됨');
-    announce('AI 탐지를 중단했습니다.');
-  } else {
-    setAiBadge('off', 'AI 미완료');
-    toast('AI 탐지가 끝까지 완료되지 않았습니다. 결과에 기록됩니다.', true);
-    announce('AI 탐지가 완료되지 않았습니다.');
-  }
-}
-
-function updateAiProgress(done, total, added) {
-  const pct = total > 0 ? (done / total) * 100 : 0;
-  $('#ai-progress').style.width = `${pct}%`;
-  $('#ai-progressbar').setAttribute('aria-valuenow', String(Math.round(pct)));
-  $('#ai-status-text').textContent = `AI 검사 ${done}/${total} · ${added}건 추가 발견`;
-}
-
-// ---------- 비식별 실행 및 결과 ----------
+// ---------- 비식별 확인·실행 및 결과 ----------
 
 function renderConfirmScreen() {
   const counts = reviewCounts(session.candidates);
@@ -913,9 +257,11 @@ function renderConfirmScreen() {
     `<div class="action-count-row"><span>${escapeHtml(label)}</span><strong>${(actionCounts[action] || 0).toLocaleString()}개</strong></div>`).join('');
 
   const aiWarning = $('#confirm-ai-warning');
-  const aiRunning = !$('#ai-status').hidden;
+  const aiRunning = ai.isRunning();
   aiWarning.hidden = !aiRunning;
-  if (aiRunning) aiWarning.textContent = 'AI 추가 탐지가 아직 진행 중입니다. 지금 실행하면 AI 검사를 중단하고 미완료 상태를 처리 기록에 남깁니다.';
+  if (aiRunning) {
+    aiWarning.textContent = 'AI 추가 탐지가 아직 진행 중입니다. 지금 실행하면 AI 검사를 중단하고 미완료 상태를 처리 기록에 남깁니다.';
+  }
   $('#final-confirm').checked = false;
   $('#btn-execute').disabled = true;
 }
@@ -936,8 +282,8 @@ async function executeDeidentify() {
   executeButton.disabled = true;
   try {
     // AI가 아직 돌고 있으면 멈춘 상태로 결과를 만든다 (미완료 사실은 요약에 기록된다)
-    const stoppedStats = await stopAiPass({ wait: true });
-    if (stoppedStats) aiStats = stoppedStats;
+    await ai.stop({ wait: true });
+    const aiStats = ai.stats;
 
     const { text: afterText, applied } = applyToText(session.parsed.text, session.candidates, session);
     const resultName = resultFileName(session.file.name);
@@ -957,7 +303,9 @@ async function executeDeidentify() {
     // AI 미완료 경고 — 완료된 것으로 오인하면 유출로 이어진다
     const aiWarn = $('#ai-incomplete-warning');
     if (aiStats && !aiStats.completed) {
-      const reason = aiStats.stopReason === 'aborted' ? '사용자가 중단' : (aiStats.stopReason === 'offline' ? 'AI 엔진 연결 끊김' : '일부 구간 실패');
+      const reason = aiStats.stopReason === 'aborted'
+        ? '사용자가 중단'
+        : (aiStats.stopReason === 'offline' ? 'AI 엔진 연결 끊김' : '일부 구간 실패');
       aiWarn.innerHTML = `⚠ <strong>AI 검사가 완료되지 않았습니다.</strong> `
         + `${escapeHtml(reason)} · ${aiStats.chunksCompleted}/${aiStats.chunksPlanned} 구간만 검사했습니다. `
         + '검사하지 않은 구간에 개인정보가 남아 있을 수 있습니다.';
@@ -991,7 +339,13 @@ async function executeDeidentify() {
   }
 }
 
-function bindResultEvents() {
+function bindConfirmAndResultEvents() {
+  // 최종 확인 후 실행 (FR-410)
+  $('#final-confirm').addEventListener('change', (e) => {
+    $('#btn-execute').disabled = !e.target.checked;
+  });
+  $('#btn-execute').addEventListener('click', executeDeidentify);
+
   $('#btn-download-result').addEventListener('click', () => {
     if (!session.result) return;
     downloadBlob(session.result.blob, session.result.fileName);
@@ -1029,28 +383,19 @@ function bindResultEvents() {
 }
 
 function newSession() {
-  stopAiPass();
+  ai.stop();
   session.dispose();
   session.reset();
-  aiStats = null;
-  loadPolicies();
-  resetReviewUi();
+  ai.resetStats();
+  loadStoredPolicies(session.typePolicies);
+  review.setPolicies(session.typePolicies);
+  resetWorkUi();
   showScreen('screen-main');
-  refreshAiAvailability();
+  ai.refreshAvailability();
 }
 
-function resetReviewUi() {
-  listView.clear();
-  highlighter.clear();
-  activeFilter = { type: null, status: 'all' };
-  $('#type-filter').value = '';
-  $$('.status-filter').forEach((item) => {
-    const active = item.dataset.status === 'all';
-    item.classList.toggle('active', active);
-    item.setAttribute('aria-pressed', String(active));
-  });
-  $('#filter-actions').hidden = true;
-  $('#selection-popover').hidden = true;
+function resetWorkUi() {
+  review.reset();
   $('#compare-changes').innerHTML = '';
   $('#compare-before').innerHTML = '';
   $('#compare-after').innerHTML = '';
@@ -1060,207 +405,13 @@ function resetReviewUi() {
   $('#btn-execute').disabled = true;
   document.querySelector('input[name="mapping-choice"][value="no"]').checked = true;
   $('#btn-download-mapping').hidden = true;
-  $('#search-input').value = '';
   $('#ai-incomplete-warning').hidden = true;
   $('#unprocessed-warning').hidden = true;
-  manualSeq = 0;
-}
-
-// ---------- 복원 탭 ----------
-
-function bindRestoreEvents() {
-  const docInput = $('#restore-doc-input');
-  const mapInput = $('#restore-map-input');
-  const btn = $('#btn-restore');
-  const validation = $('#restore-validation');
-  let validatedTable = null;
-
-  const validatePair = async () => {
-    btn.disabled = true;
-    validatedTable = null;
-    if (!(docInput.files.length > 0 && mapInput.files.length > 0)) {
-      validation.className = 'restore-validation muted';
-      validation.textContent = '두 파일을 선택하면 일치 여부와 복원 가능 항목을 확인합니다.';
-      return;
-    }
-    try {
-      const docFile = docInput.files[0];
-      const table = parseMappingTable(await mapInput.files[0].text());
-      const matches = !table.resultFileName || table.resultFileName === docFile.name;
-      const reversible = table.mappings.filter((item) => item.reversible).length;
-      const irreversible = table.mappings.length - reversible;
-      if (!matches) {
-        validation.className = 'restore-validation alert-warn';
-        validation.textContent = `파일이 일치하지 않습니다. 이 대응표는 “${table.resultFileName}”용입니다.`;
-        return;
-      }
-      validatedTable = table;
-      validation.className = 'restore-validation alert-ok';
-      validation.textContent = `파일 일치 확인 · 복원 가능 ${reversible}건 · 복원 불가 ${irreversible}건 · 원본 파일은 덮어쓰지 않습니다.`;
-      btn.disabled = reversible === 0;
-    } catch (err) {
-      validation.className = 'restore-validation alert-warn';
-      validation.textContent = err.message || '대응표 파일을 확인할 수 없습니다.';
-    }
-  };
-  docInput.addEventListener('change', validatePair);
-  mapInput.addEventListener('change', validatePair);
-
-  btn.addEventListener('click', async () => {
-    try {
-      const docFile = docInput.files[0];
-      const mapFile = mapInput.files[0];
-      const read = await validateAndRead(docFile);
-      const parsed = await parseDocument(read);
-      const mappingTable = validatedTable || parseMappingTable(await mapFile.text());
-
-      const { blob, restoredCount, notRestoredCount } = await restoreDocument(parsed, mappingTable);
-      const name = resultFileName(docFile.name, '_복원');
-      downloadBlob(blob, name);
-
-      const resultBox = $('#restore-result');
-      resultBox.innerHTML =
-        `복원 완료: <strong>${escapeHtml(name)}</strong><br />복원된 항목 ${restoredCount}건`
-        + (notRestoredCount > 0 ? ` · 복원 불가(마스킹·삭제 처리) ${notRestoredCount}건` : '');
-      resultBox.hidden = false;
-    } catch (err) {
-      showError(err);
-    }
-  });
-}
-
-// ---------- 설정 탭 ----------
-
-function renderPolicyList() {
-  $('#policy-list').innerHTML = Object.entries(PII_TYPES).map(([code, def]) => `
-<div class="policy-item">
-  <span>${escapeHtml(def.label)}</span>
-  <select data-type="${code}">
-    ${Object.entries(ACTION_LABELS).map(([a, label]) =>
-    `<option value="${a}"${session.typePolicies[code] === a ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('')}
-  </select>
-</div>`).join('');
-}
-
-function bindSettingsNavigation() {
-  $$('.settings-nav-btn').forEach((button) => {
-    button.addEventListener('click', () => {
-      $$('.settings-nav-btn').forEach((item) => item.classList.toggle('active', item === button));
-      $$('.settings-panel').forEach((panel) => panel.classList.toggle('active', panel.dataset.settingsPanel === button.dataset.settings));
-      const activePanel = $(`[data-settings-panel="${button.dataset.settings}"]`);
-      const heading = activePanel?.querySelector('h3');
-      if (heading) {
-        heading.tabIndex = -1;
-        heading.focus();
-      }
-    });
-  });
-}
-
-function bindSettingsEvents() {
-  $('#policy-list').addEventListener('change', (e) => {
-    const type = e.target.dataset.type;
-    if (!type) return;
-    session.typePolicies[type] = e.target.value;
-    savePolicies();
-    if (session.parsed) syncReview();
-  });
-
-  // AI 설정
-  $('#ai-enabled').addEventListener('change', (e) => {
-    aiSettings.enabled = e.target.checked;
-    saveAiSettings();
-    refreshAiAvailability();
-  });
-  $('#ai-endpoint').addEventListener('change', (e) => {
-    aiSettings.endpoint = e.target.value.trim() || DEFAULT_ENDPOINT;
-    $('#ai-endpoint').value = aiSettings.endpoint;
-    saveAiSettings();
-  });
-  $('#ai-model').addEventListener('change', (e) => {
-    aiSettings.model = e.target.value.trim() || DEFAULT_MODEL;
-    $('#ai-model').value = aiSettings.model;
-    saveAiSettings();
-  });
-
-  $('#btn-ai-test').addEventListener('click', async () => {
-    const out = $('#ai-test-result');
-    out.className = 'test-result';
-    out.textContent = '확인 중…';
-    const result = await checkAvailability({ endpoint: aiSettings.endpoint, model: aiSettings.model });
-    if (result.models?.length) {
-      $('#ai-model-list').innerHTML = result.models.map((m) => `<option value="${escapeHtml(m)}"></option>`).join('');
-    }
-    if (result.available) {
-      out.className = 'test-result ok';
-      out.textContent = `연결됨 — Ollama ${result.version} · ${aiSettings.model}`;
-    } else {
-      out.className = 'test-result bad';
-      out.textContent = result.message || '연결할 수 없습니다.';
-    }
-    refreshAiAvailability();
-  });
-
-  $('#btn-add-rule').addEventListener('click', () => {
-    const name = $('#rule-name').value.trim();
-    const pattern = $('#rule-pattern').value.trim();
-    if (!name || !pattern) {
-      toast('규칙 이름과 정규표현식을 입력하십시오.', true);
-      return;
-    }
-    try {
-      new RegExp(pattern, 'g'); // 정규식 사전 검증
-    } catch {
-      toast('올바르지 않은 정규표현식입니다.', true);
-      return;
-    }
-    userRules.push({ name, pattern, type: 'CUSTOM' });
-    renderRuleList();
-    $('#rule-name').value = '';
-    $('#rule-pattern').value = '';
-    toast('규칙을 추가했습니다. 다음 분석부터 적용됩니다.');
-  });
-
-  $('#rule-list').addEventListener('click', (e) => {
-    if (!e.target.classList.contains('rule-delete')) return;
-    userRules.splice(Number(e.target.dataset.index), 1);
-    renderRuleList();
-  });
-
-  // 설정 초기화 (FR-804)
-  $('#btn-reset-settings').addEventListener('click', () => {
-    try {
-      localStorage.removeItem(POLICY_STORAGE_KEY);
-      localStorage.removeItem(AI_STORAGE_KEY);
-    } catch { /* 무시 */ }
-    session.typePolicies = session.defaultPolicies();
-    aiSettings = { enabled: true, endpoint: DEFAULT_ENDPOINT, model: DEFAULT_MODEL };
-    userRules = [];
-    loadAiSettings();
-    renderPolicyList();
-    renderRuleList();
-    refreshAiAvailability();
-    toast('설정을 초기 상태로 되돌렸습니다.');
-  });
-}
-
-function renderRuleList() {
-  $('#rule-list').innerHTML = userRules
-    .map((r, i) => `<li><strong>${escapeHtml(r.name)}</strong> <code>${escapeHtml(r.pattern)}</code>`
-      + `<span class="sp"></span><button class="btn tiny rule-delete" data-index="${i}">삭제</button></li>`)
-    .join('');
-}
-
-// ---------- 오류 표시 (개인정보 원문 미포함, NFR-003) ----------
-
-function showError(err) {
-  const message = err instanceof AppError ? err.message : '처리 중 오류가 발생했습니다. 다시 시도해 주십시오.';
-  toast(message, true);
 }
 
 // 페이지 이탈 시 임시 데이터 정리 (FR-705)
 window.addEventListener('beforeunload', () => {
-  stopAiPass();
+  ai?.stop();
   session.dispose();
 });
 

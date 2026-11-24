@@ -22,38 +22,6 @@ export function renderAfterHtml(afterText, applied) {
   return html;
 }
 
-// 유형별 필터 칩 (FR-406 일괄처리 진입점)
-export function renderTypeChips(candidates, active) {
-  const counts = new Map();
-  let aiCount = 0;
-  let disputedCount = 0;
-  for (const c of candidates) {
-    counts.set(c.type, (counts.get(c.type) || 0) + 1);
-    if (c.aiOnly) aiCount += 1;
-    if (c.aiDisputed) disputedCount += 1;
-  }
-
-  // 필터가 없는 상태가 곧 "전체"다. 아무것도 눌리지 않은 것처럼 보이면 안 된다.
-  const noFilter = !active.type && !active.source;
-  const chip = (key, label, n, extraClass = '') => {
-    const isActive = key === 'all' ? noFilter : (active.type === key || active.source === key);
-    // 토글 버튼이므로 눌림 상태를 aria-pressed로 알린다 (색만으로는 전달되지 않는다)
-    return `<button class="chip ${extraClass}${isActive ? ' active' : ''}" data-chip="${key}"`
-      + ` aria-pressed="${isActive}" aria-label="${escapeHtml(label)} ${n}건">`
-      + `${escapeHtml(label)}<span class="n">${n}</span></button>`;
-  };
-
-  let html = chip('all', '전체', candidates.length);
-  // 검토가 필요한 것부터 앞에 둔다
-  if (aiCount > 0) html += chip('ai', 'AI 발견', aiCount, 'ai-chip');
-  if (disputedCount > 0) html += chip('disputed', 'AI 오탐 의심', disputedCount, 'ai-chip');
-  for (const [code, def] of Object.entries(PII_TYPES)) {
-    const n = counts.get(code) || 0;
-    if (n > 0) html += chip(code, def.label, n);
-  }
-  return html;
-}
-
 // 파싱 메타정보 표시 (FR-104)
 const META_LABELS = {
   sheetCount: '시트', sheetNames: '시트명', paragraphCount: '문단', tableCount: '표',

@@ -4,7 +4,7 @@
 import { strFromU8, strToU8 } from 'fflate';
 import {
   safeUnzip, rezip, extractSegments, extractXlsxSegments,
-  joinSegments, applyToSegments, spliceXml,
+  joinSegments, applyToSegments, spliceXml, decodeXmlEntities,
 } from './zipUtils.js';
 import { AppError } from '../core/errors.js';
 
@@ -77,9 +77,17 @@ export function parseZipDocument(buffer, format) {
   const files = [];
   for (const path of targets.sort()) {
     const xml = strFromU8(entries[path]);
-    const segments = format === 'xlsx' && /^xl\/worksheets\/sheet\d+\.xml$/.test(path)
-      ? extractXlsxSegments(xml)
-      : extractSegments(xml, config.segmentSpec);
+    let segments;
+    if (format === 'xlsx' && /^xl\/worksheets\/sheet\d+\.xml$/.test(path)) {
+      segments = extractXlsxSegments(xml);
+    } else if (format === 'xlsx' && path === 'xl/sharedStrings.xml') {
+      // 동일 <si> 안의 서식 분리 런(<r><t>)은 결합하고 <si> 경계에서만 줄바꿈한다
+      segments = extractSegments(xml, {
+        openTag: '<t(?:\\s[^>]*)?>', closeTag: '</t>', paragraphClose: '</si>',
+      });
+    } else {
+      segments = extractSegments(xml, config.segmentSpec);
+    }
     if (segments.length > 0) segments[0].fileBoundary = true;
     files.push({ path, xml, segments });
   }
@@ -89,14 +97,174 @@ export function parseZipDocument(buffer, format) {
     throw new AppError('E006', '문서에서 추출할 텍스트가 없습니다.');
   }
 
+  const xlsxTables = format === 'xlsx' ? extractXlsxTables(files, entries, text) : undefined;
+
   return {
     format,
     text,
     entries,
     files,
+    xlsxTables,
     mime: config.mime,
     meta: { ...config.meta(entries), charCount: text.length },
   };
+}
+
+// A → 0, B → 1, ..., AA → 26
+function colRefToIndex(letters) {
+  let idx = 0;
+  for (let i = 0; i < letters.length; i++) {
+    idx = idx * 26 + (letters.charCodeAt(i) - 64);
+  }
+  return idx - 1;
+}
+
+// xl/styles.xml에서 셀 스타일 인덱스(s) → 사용자 지정 숫자 서식(formatCode) 매핑 추출
+function parseXlsxStyleNumFmts(entries) {
+  if (!entries['xl/styles.xml']) return [];
+  const xml = strFromU8(entries['xl/styles.xml']);
+  const numFmts = new Map();
+  for (const m of xml.matchAll(/<numFmt\b([^>]*)\/?>/g)) {
+    const attrs = m[1];
+    const id = /\bnumFmtId="(\d+)"/.exec(attrs)?.[1];
+    const code = /\bformatCode="([^"]*)"/.exec(attrs)?.[1];
+    if (id !== undefined && code !== undefined) {
+      numFmts.set(Number(id), decodeXmlEntities(code));
+    }
+  }
+  const cellXfsMatch = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/.exec(xml);
+  if (!cellXfsMatch) return [];
+  const styleFmtCodes = [];
+  for (const m of cellXfsMatch[1].matchAll(/<xf\b([^>]*)(?:\/>|>[\s\S]*?<\/xf>)/g)) {
+    const id = /\bnumFmtId="(\d+)"/.exec(m[1])?.[1];
+    styleFmtCodes.push(id !== undefined ? (numFmts.get(Number(id)) || null) : null);
+  }
+  return styleFmtCodes;
+}
+
+// XLSX 워크시트의 2차원 셀 그리드를 추출하여 각 셀을 전역 텍스트 오프셋에 연결한다
+function extractXlsxTables(files, entries, fullText) {
+  const styleFmtCodes = parseXlsxStyleNumFmts(entries);
+
+  // 1) sharedStrings 인덱스별 전역 오프셋 구축
+  const sharedStrings = [];
+  const ssFile = files.find((f) => f.path === 'xl/sharedStrings.xml');
+  if (ssFile) {
+    let segPtr = 0;
+    const segs = ssFile.segments;
+    for (const m of ssFile.xml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)) {
+      const siStart = m.index;
+      const siEnd = m.index + m[0].length;
+      while (segPtr < segs.length && segs[segPtr].rawEnd <= siStart) segPtr += 1;
+      let first = null;
+      let last = null;
+      let j = segPtr;
+      while (j < segs.length && segs[j].rawStart < siEnd) {
+        if (segs[j].rawStart >= siStart && segs[j].rawEnd <= siEnd) {
+          if (!first) first = segs[j];
+          last = segs[j];
+        }
+        j += 1;
+      }
+      segPtr = j;
+      if (first && last) {
+        sharedStrings.push({
+          text: fullText.slice(first.globalStart, last.globalEnd),
+          start: first.globalStart,
+          end: last.globalEnd,
+        });
+      } else {
+        sharedStrings.push(null);
+      }
+    }
+  }
+
+  // 2) 시트별 행·셀 그리드 추출
+  const tables = [];
+  for (const file of files) {
+    if (!/^xl\/worksheets\/sheet\d+\.xml$/.test(file.path)) continue;
+
+    const numericByCellStart = new Map();
+    const textSegs = [];
+    for (const seg of file.segments) {
+      if (seg.xlsxNumeric) numericByCellStart.set(seg.cellStart, seg);
+      else textSegs.push(seg);
+    }
+
+    let textPtr = 0;
+    const rows = [];
+    for (const rowMatch of file.xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
+      const rowXml = rowMatch[1];
+      const rowBodyStart = rowMatch.index + rowMatch[0].indexOf(rowXml);
+      const cells = [];
+      let prevCol = -1;
+
+      for (const cellMatch of rowXml.matchAll(/<c\b([^>]*)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+        const attrs = cellMatch[1];
+        const body = cellMatch[2];
+        const ref = /\br="([A-Z]+)\d+"/.exec(attrs)?.[1];
+        const col = ref ? colRefToIndex(ref) : prevCol + 1;
+        prevCol = col;
+        if (body === undefined) continue;
+
+        const cellStart = rowBodyStart + cellMatch.index;
+        const cellEnd = cellStart + cellMatch[0].length;
+        const type = /\bt="([^"]+)"/.exec(attrs)?.[1] || 'n';
+        const styleAttr = /\bs="(\d+)"/.exec(attrs)?.[1];
+        const numFmtCode = styleAttr !== undefined ? (styleFmtCodes[Number(styleAttr)] || null) : null;
+
+        if (type === 's') {
+          const idxStr = /<v>(\d+)<\/v>/.exec(body)?.[1];
+          if (idxStr === undefined) continue;
+          const siIndex = Number(idxStr);
+          const ss = sharedStrings[siIndex];
+          if (!ss) continue;
+          cells.push({
+            col, text: ss.text, start: ss.start, end: ss.end,
+            isShared: true, siIndex,
+          });
+        } else if (type === 'inlineStr') {
+          while (textPtr < textSegs.length && textSegs[textPtr].rawEnd <= cellStart) textPtr += 1;
+          let first = null;
+          let last = null;
+          let j = textPtr;
+          while (j < textSegs.length && textSegs[j].rawStart < cellEnd) {
+            if (textSegs[j].rawStart >= cellStart && textSegs[j].rawEnd <= cellEnd) {
+              if (!first) first = textSegs[j];
+              last = textSegs[j];
+            }
+            j += 1;
+          }
+          textPtr = j;
+          if (!first || !last) continue;
+          cells.push({
+            col,
+            text: fullText.slice(first.globalStart, last.globalEnd),
+            start: first.globalStart,
+            end: last.globalEnd,
+            isInline: true,
+          });
+        } else if (type === 'n') {
+          const seg = numericByCellStart.get(cellStart);
+          if (!seg) continue;
+          cells.push({
+            col,
+            text: seg.text,
+            start: seg.globalStart,
+            end: seg.globalEnd,
+            isNumeric: true,
+            numFmtCode,
+          });
+        }
+      }
+
+      if (cells.length > 0) rows.push(cells);
+    }
+
+    if (rows.length > 0) tables.push({ name: file.path, rows });
+  }
+
+  return tables;
 }
 
 // 적용 내역을 XML에 반영하여 결과 ZIP 생성

@@ -3,7 +3,9 @@
 
 import { decodeBuffer, encodeText } from './encoding.js';
 import { AppError } from '../core/errors.js';
-import { FIELD_KEYWORDS_BY_TYPE } from '../detect/dictionaries.js';
+import { inferColumnTypes, findHeaderRow, extractTabularCandidates } from './tabular.js';
+
+export { inferColumnTypes };
 
 // 구분자 판별: 첫 행 기준 쉼표/탭/세미콜론 출현 수 비교
 export function detectDelimiter(text) {
@@ -67,24 +69,6 @@ export function tokenizeCsv(text, delimiter) {
   return rows;
 }
 
-// 헤더명 → 개인정보 유형 추정 (기술명세서 Ⅳ-3: 헤더명 기반 유형 추정)
-export function inferColumnTypes(headerRow) {
-  const hints = [];
-  for (let col = 0; col < headerRow.length; col++) {
-    const header = headerRow[col].value.trim();
-    if (!header) { hints.push(null); continue; }
-    let matched = null;
-    for (const [type, keywords] of Object.entries(FIELD_KEYWORDS_BY_TYPE)) {
-      if (keywords.some((k) => header === k || header.includes(k))) {
-        matched = type;
-        break;
-      }
-    }
-    hints.push(matched);
-  }
-  return hints;
-}
-
 export function parseCsv(buffer) {
   let decoded;
   try {
@@ -96,11 +80,15 @@ export function parseCsv(buffer) {
   const delimiter = detectDelimiter(text);
   const rows = tokenizeCsv(text, delimiter);
 
-  // 첫 행 헤더 여부: 첫 행에 숫자만인 셀이 없으면 헤더로 간주
-  const firstRow = rows[0] || [];
-  const hasHeader =
-    firstRow.length > 1 && firstRow.every((c) => c.value.trim() !== '' && !/^\d+$/.test(c.value.trim()));
-  const columnTypeHints = hasHeader ? inferColumnTypes(firstRow) : [];
+  const tableRows = rows.map((r) => r.map((cell, col) => ({
+    col, text: cell.value, start: cell.start, end: cell.end,
+  })));
+  const { headerRowIndex, headerHints } = findHeaderRow(tableRows);
+  const hasHeader = headerRowIndex >= 0;
+  const headerRow = hasHeader ? rows[headerRowIndex] : [];
+  const columnTypeHints = hasHeader
+    ? headerRow.map((_, col) => headerHints.get(col) || null)
+    : [];
 
   return {
     format: 'csv',
@@ -110,10 +98,11 @@ export function parseCsv(buffer) {
     delimiter,
     rows,
     hasHeader,
+    headerRowIndex,
     columnTypeHints,
     meta: {
       rowCount: rows.length,
-      columnCount: firstRow.length,
+      columnCount: (rows[0] || []).length,
       delimiter: delimiter === '\t' ? '탭' : delimiter,
       encoding: decoded.encoding.toUpperCase(),
       hasHeader,
@@ -121,31 +110,12 @@ export function parseCsv(buffer) {
   };
 }
 
-// 헤더 유형 힌트 기반 열 단위 후보 생성 (엔진 결과와 병합 후 중첩 정리)
-export function columnCandidates(parsed) {
-  if (!parsed.hasHeader) return [];
-  const out = [];
-  const { rows, columnTypeHints } = parsed;
-  for (let r = 1; r < rows.length; r++) {
-    for (let col = 0; col < rows[r].length; col++) {
-      const type = columnTypeHints[col];
-      if (!type) continue;
-      const cell = rows[r][col];
-      const value = cell.value.trim();
-      if (!value) continue;
-      const offset = cell.value.indexOf(value);
-      out.push({
-        start: cell.start + offset,
-        end: cell.start + offset + value.length,
-        originalText: value,
-        type,
-        baseScore: 0.8,
-        detectionMethod: 'FIELD_HEADER',
-        context: `${rows[0][col].value.trim()} 열`,
-      });
-    }
-  }
-  return out;
+// 헤더 유형 힌트·내용 일관성 기반 열 단위 후보 생성 (엔진 결과와 병합 후 중첩 정리)
+export function columnCandidates(parsed, engineCandidates = []) {
+  const tableRows = (parsed.rows || []).map((r) => r.map((cell, col) => ({
+    col, text: cell.value, start: cell.start, end: cell.end,
+  })));
+  return extractTabularCandidates([{ name: 'csv', rows: tableRows }], engineCandidates);
 }
 
 export function buildCsvResult(parsed, processedText) {

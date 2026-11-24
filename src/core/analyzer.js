@@ -3,6 +3,7 @@
 import { parseTxt, buildTxtResult } from '../parsers/txt.js';
 import { parseCsv, columnCandidates, buildCsvResult } from '../parsers/csv.js';
 import { parseZipDocument, buildZipResult, restoreZipDocument } from '../parsers/xmlDoc.js';
+import { extractTabularCandidates } from '../parsers/tabular.js';
 import { parsePdf, buildPdfResult } from '../parsers/pdf.js';
 import { restoreText } from './restore.js';
 import { detectAll, resolveOverlaps } from '../detect/engine.js';
@@ -27,38 +28,42 @@ export async function parseDocument(file) {
   }
 }
 
-// 탐지 실행: 엔진 후보 + CSV 열 힌트 후보를 병합하고 중첩을 정리
+// 탐지 실행: 엔진 후보 + CSV/XLSX 열 힌트 후보를 병합하고 중첩을 정리
 export function analyze(parsed, userRules = []) {
   const engineCandidates = detectAll(parsed.text, 'body', userRules);
 
+  let colCands = [];
   if (parsed.format === 'csv') {
-    const colCands = columnCandidates(parsed);
-    if (colCands.length > 0) {
-      // 엔진 후보를 원시 형태로 되돌려 병합 (id는 병합 후 재부여)
-      const raw = engineCandidates.map((c) => ({
-        start: c.start, end: c.end, originalText: c.originalText, type: c.type,
-        baseScore: c.confidence, detectionMethod: c.detectionMethod, context: c.context,
-      }));
-      const merged = resolveOverlaps([...raw, ...colCands]);
-      let seq = 0;
-      return merged.map((c) => {
-        seq += 1;
-        return {
-          id: `pii-${String(seq).padStart(6, '0')}`,
-          documentPart: 'body',
-          start: c.start,
-          end: c.end,
-          originalText: c.originalText,
-          type: c.type,
-          confidence: Math.max(0, Math.min(1, c.baseScore)),
-          detectionMethod: c.detectionMethod,
-          context: c.context || getContext(parsed.text, c.start, c.end),
-          selected: true,
-          action: null,
-          replacementText: null,
-        };
-      });
-    }
+    colCands = columnCandidates(parsed, engineCandidates);
+  } else if (parsed.format === 'xlsx' && parsed.xlsxTables?.length > 0) {
+    colCands = extractTabularCandidates(parsed.xlsxTables, engineCandidates);
+  }
+
+  if (colCands.length > 0) {
+    // 엔진 후보를 원시 형태로 되돌려 병합 (id는 병합 후 재부여)
+    const raw = engineCandidates.map((c) => ({
+      start: c.start, end: c.end, originalText: c.originalText, type: c.type,
+      baseScore: c.confidence, detectionMethod: c.detectionMethod, context: c.context,
+    }));
+    const merged = resolveOverlaps([...raw, ...colCands]);
+    let seq = 0;
+    return merged.map((c) => {
+      seq += 1;
+      return {
+        id: `pii-${String(seq).padStart(6, '0')}`,
+        documentPart: 'body',
+        start: c.start,
+        end: c.end,
+        originalText: c.originalText,
+        type: c.type,
+        confidence: Math.max(0, Math.min(1, c.baseScore)),
+        detectionMethod: c.detectionMethod,
+        context: c.context || getContext(parsed.text, c.start, c.end),
+        selected: true,
+        action: null,
+        replacementText: null,
+      };
+    });
   }
   return engineCandidates;
 }

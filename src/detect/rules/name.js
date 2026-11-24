@@ -7,17 +7,19 @@ import {
 } from '../dictionaries.js';
 import { makeCandidate } from './helpers.js';
 
-// 모든 유형의 필드명 키워드("차량번호", "전화번호" 등)는 성명 후보에서 제외
+// O(1) 조회용 사전 Set
 const ALL_FIELD_KEYWORDS = new Set(
   Object.values(FIELD_KEYWORDS_BY_TYPE).flat().filter((k) => /^[가-힣]+$/.test(k)),
 );
+const NAME_TITLE_SET = new Set(NAME_TITLES);
+const NAME_FIELD_SET = new Set(NAME_FIELD_KEYWORDS);
+const COLON_LABEL_SET = new Set(COLON_NAME_LABELS);
 const BANK_NAME_SET = new Set(BANK_NAMES);
 const SIDO_NAME_SET = new Set(SIDO_NAMES);
 const NON_NAME_LABEL_SET = new Set(NON_NAME_FIELD_LABELS);
 
 // 필드명 뒤의 값: "성명: 홍길동", "이름 홍길동"
 // 반드시 콜론(:·：·=) 또는 공백 구분자가 1개 이상 있어야 한다.
-// (구분자가 없으면 "담당자였던", "대리인으로"의 어미/조사를 이름으로 오탐한다)
 const FIELD_NAME_PATTERN = new RegExp(
   `(${NAME_FIELD_KEYWORDS.join('|')})([ \\t]*[:：=][ \\t]*|[ \\t]+)([가-힣]{2,5})(?![가-힣])`,
   'g',
@@ -47,6 +49,24 @@ const FIELD_PARTICLE_PATTERN = new RegExp(
   `(${ALL_NAME_LABELS.join('|')})(?:은|는|이|가)[ \\t]+([가-힣]{2,7})(?![가-힣])`,
   'g',
 );
+
+// 필드명+조사 뒤 다중 어절 외국인 성명 ("이름은 무함마드 라시드였고", "통역은 제임스 카터가")
+const FIELD_PARTICLE_FOREIGN_PATTERN = new RegExp(
+  `(${ALL_NAME_LABELS.join('|')})(?:은|는|이|가)[ \\t]+([가-힣]{1,5}(?:[ \\t]+[가-힣]{1,6}){1,3})(?![가-힣])`,
+  'g',
+);
+
+// 다중 어절 외국인 성명 + 호칭/통역 ("응우옌 티 흐엉 씨가", "제임스 카터 님", "응우옌 티 흐엉 통역이었다")
+const FOREIGN_TITLE_PATTERN =
+  /(?:^|[^\uAC00-\uD7A3])([가-힣]{1,5}(?:[ \t]+[가-힣]{1,5}){1,3})[ \t]+(님|씨|통역)(?:은|는|이|가|을|를|의|께|께서|에게|한테|과|와|도|만|이다|이었다|이었|였|이며|이고)?(?![가-힣])/g;
+
+// 외국인 성명 앞쪽에서 잘라낼 일반 접속·부사어 ("이후 응우옌 티 흐엉 씨가", "그리고 응우옌 티 흐엉 통역")
+const FOREIGN_LEAD_STOPWORDS = new Set([
+  '이후', '이전', '당시', '그리고', '또는', '및', '또', '다만', '단', '한편', '대신', '함께',
+  '직접', '최근', '최초', '지난', '다음', '현재', '지금', '이번', '작년', '올해', '내년',
+  '먼저', '다시', '바로', '이미', '아직', '매우', '정말', '항상', '각', '모든', '해당', '관련',
+  '추가', '별도', '기존', '기타', '약', '총', '등', '참석', '불참', '담당', '작성', '서기',
+]);
 
 // 이름 뒤에 붙는 서술어 어미 ("최다은이다" → "최다은", "배수지였고" → "배수지")
 const PREDICATE_SUFFIX = /(입니다|이었다|이었고|이었으며|이라고|이라는|이다|이고|이며|였다|였고|였으며|라고)$/;
@@ -102,18 +122,36 @@ const ROLE_JA_PATTERN = new RegExp(
   '(관계|관련|해당|신청|대상|지원|후보|참가|방문|거주|운전|보행|사망|부상|실종|동반|이용|사용|소비|판매|구매|공급|채권|채무|임차|수급|유권|납세|응시|당선|입찰|낙찰|출입|체류|입국|출국|생존|구조|피해|가해|점유|발주|가입|수익|경영|생산|수요|노동|근로|관리|운영|책임|실무|검토|결재|승인|참석|불참|발표|진행|사회|강연|적격|위반|체납|미납|연체|희망|예정|선정|탈락|포기|이수|수료|졸업|전출|전입|퇴직|재직|휴직|복직|구직|실업|취업|창업|폐업|경력|초보|실제소유|비상연락|이해관계|특수관계|민원|담당|소유|대표|작성|접수|수신|발신|보호|계약|피보험|상담|배석|처리)자$',
 );
 
-// 동사·형용사·관형형·어미 활용형 ("연락하여", "가능한", "동일한", "주십시오", "부재중일", "안내해", "남긴")
+// 동사·형용사·관형형·어미 활용형 ("연락하여", "가능한", "동일한", "주십시오", "부재중일", "안내해", "남긴", "밝히지", "않으셨다")
 const VERB_OR_MODIFIER_SUFFIX =
-  /(하여|하고|하는|하니|하면|하며|했다|한다|합니다|되어|된다|됩니다|하기|하지|가능한|동일한|유일한|필요한|중요한|명확한|정확한|적절한|충분한|다양한|특별한|간단한|복잡한|유사한|상세한|긴급한|신속한|안전한|위험한|불가한|부당한|정당한|타당한|합당한|십시오|세요|시오|바랍니다|습니다|았다|었다|였다|겠다|는지|았던|었던|였던|해서|해야|해도|해주|해달|드리|드림|주었|받았|맡았|남긴|보낸|찾은|없는|있는|같은|따른|위한|관한|대한|부재중일|안내해)$/;
+  /(하여|하고|하는|하니|하면|하며|했다|한다|합니다|되어|된다|됩니다|하기|하지|히지|키지|리지|기지|지지|치지|피지|티지|되지|셨다|으셨다|않다|않았|않는|않으|가능한|동일한|유일한|필요한|중요한|명확한|정확한|적절한|충분한|다양한|특별한|간단한|복잡한|유사한|상세한|긴급한|신속한|안전한|위험한|불가한|부당한|정당한|타당한|합당한|십시오|세요|시오|바랍니다|습니다|았다|었다|였다|겠다|는지|았던|었던|였던|해서|해야|해도|해주|해달|드리|드림|주었|받았|맡았|남긴|보낸|찾은|없는|있는|같은|따른|위한|관한|대한|부재중일|안내해)$/;
 
 // 서술격 조사·연결 어미 단독 단어 ("이다", "이며", "이고", "이나" 등은 성명이 아님)
-const COPULA_WORDS = new Set(['이다', '이며', '이고', '이라', '이나', '이란', '이지', '이든', '임에', '인한', '인데']);
+// 주의: "이든"은 실제 2글자 성명(이+든)으로 쓰이므로 제외한다.
+const COPULA_WORDS = new Set(['이다', '이며', '이고', '이라', '이나', '이란', '이지', '임에', '인한', '인데']);
 
 // 법인·회사 접두어 ("주식회사 한빛", "(주) 미래" 등)
 const COMPANY_PREFIX_RE = /(?:주식회사|유한회사|합자회사|합명회사|사단법인|재단법인|학교법인|\(주\)|\[주\])[ \t]+$/;
 
 // 한글 숫자 표기 ("공일공", "구팔칠육", "오사삼이" 등 전화·주민번호 구술 표기)
 const HANGUL_DIGIT_ONLY = /^[공영일이삼사오육칠팔구십백천만억조]+$/;
+
+const PRECEDING_NON_NAME_LABEL_RE = new RegExp(
+  `(?:^|[^가-힣])(${NON_NAME_FIELD_LABELS.join('|')})[ \\t]*[:：=][ \\t]*$`,
+);
+const FOLLOWING_ORG_CONTEXT_RE =
+  /^(?:[ \t]*(?:소관|산하|관할)(?:사업소|부서|기관)?|[ \t]*[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩI]{1,3}(?:[ \t]*\(\d+|\b)|[ \t]*\(\d+(?:명|개소|구역|건|%)?\))/;
+
+const HANGUL_WORD = /[가-힣]{2,5}/g;
+const TITLE_PATTERN = new RegExp(
+  `^\\s?(${NAME_TITLES.join('|')})(?:은|는|이|가|을|를|의|께|께서|에게|한테|과|와|도|만|으로부터|에게서)?(?![가-힣])`,
+);
+const PRECEDING_TITLE_PATTERN = new RegExp(
+  `(?:^|[^가-힣0-9])(?:${NAME_TITLES.join('|')}|[가-힣]{0,6}\\d급|[가-힣]{0,4}(?:연구사|지도사))[ \\t]+$`,
+);
+const PERSON_PARTICLE_AFTER = /^(?:(에게서|에게|한테|께서|께)(?![가-힣])|(과|와)[ \t]+함께)/;
+const PERSON_ACTION_CONTEXT =
+  /(방문|제출|신청|접수|작성|서명|날인|참석|불참|동행|안내해|안내하|연락|문의|상담|수령|입금|출금|송금|결제|위임|대리인|본인|민원인|신청인|예금주|수령인|보호자|환자|피해자|거주|전입|전출|입원|퇴원|진료|출장|근무|입사|퇴사|진술|넘겨받아|검토하|마무리하|맡았|돌아갔|확인하였|확인했|요청하였|요청했)/;
 
 // 하나의 단어에서 성명일 수 있는 표기들을 길이 내림차순으로 반환한다.
 // 마지막 원소는 항상 조사를 최대한 뗀 형태이며, 점수 계산의 기준이 된다.
@@ -140,48 +178,44 @@ export function nameVariants(word) {
 export function isNonNameWord(word) {
   if (typeof word !== 'string') return true;
   const trimmed = word.trim();
-  if (trimmed.length < 2) return true;
-  if (!/[가-힣A-Za-z]/.test(trimmed)) return true;
+  if (trimmed.length < 2 || !/[가-힣A-Za-z]/.test(trimmed)) return true;
 
   // 띄어쓰기가 포함된 경우 ("주식회사 한빛", "안전관리 인력배치", "응우옌 티 흐엉")
   if (/\s/.test(trimmed)) {
     const tokens = trimmed.split(/\s+/).filter(Boolean);
     if (tokens.some((t) =>
       BANK_NAME_SET.has(t) ||
-      NAME_TITLES.includes(t) ||
-      NAME_FIELD_KEYWORDS.includes(t) ||
+      NAME_TITLE_SET.has(t) ||
+      NAME_FIELD_SET.has(t) ||
       NON_NAME_LABEL_SET.has(t) ||
       ALL_FIELD_KEYWORDS.has(t) ||
       (t.length >= 2 && (ORG_AND_OBJECT_SUFFIX.test(t) || ADMIN_DEPT_PATTERN.test(t))))) {
       return true;
     }
-    if (tokens.every((t) => isNonNameWord(t))) return true;
-    return false;
+    return tokens.every((t) => isNonNameWord(t));
   }
 
-  if (COPULA_WORDS.has(trimmed)) return true;
-  if (NAME_STOPWORDS.has(trimmed)) return true;
-  if (NAME_TITLES.includes(trimmed)) return true;
-  if (NAME_FIELD_KEYWORDS.includes(trimmed) || COLON_NAME_LABELS.includes(trimmed)) return true;
-  if (NON_NAME_LABEL_SET.has(trimmed)) return true;
-  if (ALL_FIELD_KEYWORDS.has(trimmed)) return true;
-  if (SIDO_NAME_SET.has(trimmed)) return true;
-  if (BANK_NAME_SET.has(trimmed)) return true;
-  if (HANGUL_DIGIT_ONLY.test(trimmed)) return true;
-  if (VERB_OR_MODIFIER_SUFFIX.test(trimmed)) return true;
-  if (DEPT_GWA_PATTERN.test(trimmed)) return true;
-  if (ORG_AND_OBJECT_SUFFIX.test(trimmed)) return true;
-  if (ADMIN_DEPT_PATTERN.test(trimmed)) return true;
-  if (ROLE_JA_PATTERN.test(trimmed)) return true;
-  if (RANK_TITLE_PATTERN.test(trimmed)) return true;
-
-  return false;
+  return (
+    COPULA_WORDS.has(trimmed) ||
+    NAME_STOPWORDS.has(trimmed) ||
+    NAME_TITLE_SET.has(trimmed) ||
+    NAME_FIELD_SET.has(trimmed) ||
+    COLON_LABEL_SET.has(trimmed) ||
+    NON_NAME_LABEL_SET.has(trimmed) ||
+    ALL_FIELD_KEYWORDS.has(trimmed) ||
+    SIDO_NAME_SET.has(trimmed) ||
+    BANK_NAME_SET.has(trimmed) ||
+    HANGUL_DIGIT_ONLY.test(trimmed) ||
+    VERB_OR_MODIFIER_SUFFIX.test(trimmed) ||
+    DEPT_GWA_PATTERN.test(trimmed) ||
+    ORG_AND_OBJECT_SUFFIX.test(trimmed) ||
+    ADMIN_DEPT_PATTERN.test(trimmed) ||
+    ROLE_JA_PATTERN.test(trimmed) ||
+    RANK_TITLE_PATTERN.test(trimmed)
+  );
 }
 
 // 앞쪽 같은 줄에 비성명 라벨("처리부서:", "소속:", "상호:", "진료과:" 등)이 있는지 확인
-const PRECEDING_NON_NAME_LABEL_RE = new RegExp(
-  `(?:^|[^가-힣])(${NON_NAME_FIELD_LABELS.join('|')})[ \\t]*[:：=][ \\t]*$`,
-);
 export function isPrecededByNonNameLabel(text, start) {
   const lineStart = Math.max(0, text.lastIndexOf('\n', start - 1) + 1, start - 20);
   const before = text.slice(lineStart, start);
@@ -189,38 +223,12 @@ export function isPrecededByNonNameLabel(text, start) {
 }
 
 // 뒤쪽 같은 줄에 조직·정원·소관 표기("문화국 소관사업소", "신공항국(12)", "사업소Ⅰ(18)")가 이어지는지 확인
-const FOLLOWING_ORG_CONTEXT_RE =
-  /^(?:[ \t]*(?:소관|산하|관할)(?:사업소|부서|기관)?|[ \t]*[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩI]{1,3}(?:[ \t]*\(\d+|\b)|[ \t]*\(\d+(?:명|개소|구역|건|%)?\))/;
 export function isFollowedByOrgContext(text, end) {
   const after = text.slice(end, Math.min(text.length, end + 20));
   return FOLLOWING_ORG_CONTEXT_RE.test(after);
 }
 
-// 한글 2~5글자 단어 (성씨 사전 확인용)
-const HANGUL_WORD = /[가-힣]{2,5}/g;
-
-// 직위·호칭 뒤에 조사("신동현 님은", "박서준 씨가", "김서연 주무관이")가 붙는 경우도 함께 인식
-const TITLE_PATTERN = new RegExp(
-  `^\\s?(${NAME_TITLES.join('|')})(?:은|는|이|가|을|를|의|께|께서|에게|한테|과|와|도|만|으로부터|에게서)?(?![가-힣])`,
-);
-
-// 이름 앞에 붙는 직위·직급·호칭 ("팀장 홍길동", "공업6급 김일", "행정6급 하은지", "학예연구사 김민준")
-const PRECEDING_TITLE_PATTERN = new RegExp(
-  `(?:^|[^가-힣0-9])(?:${NAME_TITLES.join('|')}|[가-힣]{0,6}\\d급|[가-힣]{0,4}(?:연구사|지도사))[ \\t]+$`,
-);
-
-// 사람에게만 붙는 여격/높임 조사 또는 동반 표현 ("윤소라에게", "홍길동께서", "강태오와 함께")
-const PERSON_PARTICLE_AFTER = /^(?:(에게서|에게|한테|께서|께)(?![가-힣])|(과|와)[ \t]+함께)/;
-
-// 주격/보조사/관형격 뒤에서 사람임을 뒷받침하는 행위·역할 문맥
-const PERSON_ACTION_CONTEXT =
-  /(방문|제출|신청|접수|작성|서명|날인|참석|불참|동행|안내해|안내하|연락|문의|상담|수령|입금|출금|송금|결제|위임|대리인|본인|민원인|신청인|예금주|수령인|보호자|환자|피해자|거주|전입|전출|입원|퇴원|진료|출장|근무|입사|퇴사|진술|넘겨받아|검토하|마무리하|맡았|돌아갔|확인하였|확인했|요청하였|요청했)/;
-
 // 성씨 + 음절 수 적합성 검사
-// - 복성(남궁·황보 등): 3~4글자 ("남궁민", "남궁민수")
-// - 단성(김·이·박 등): 기본 2~3글자 ("홍길동", "한결").
-//   단성 4글자 단어는 거의 모두 사자성어·복합명사("안전관리", "인력배치", "신공항국")이므로
-//   직위·호칭이나 성명 필드명이 명시된 경우에만 허용한다.
 function startsWithValidSurname(word, allowFourCharSingleSurname = false) {
   if (KOREAN_SURNAMES_2CHAR.has(word.slice(0, 2))) {
     return word.length >= 3 && word.length <= 4;
@@ -233,29 +241,31 @@ function startsWithValidSurname(word, allowFourCharSingleSurname = false) {
 }
 
 // 같은 줄(또는 인접 줄)에 정형 개인정보가 있는지 확인
+// 이전 줄(newlines===1)이 먼저 나와도 같은 줄(newlines===0)을 끝까지 확인한다.
 function isNearStructuredPii(text, start, end, otherPiiRanges) {
+  let near = false;
   for (const r of otherPiiRanges) {
     const dist = r.start >= end ? r.start - end : (start >= r.end ? start - r.end : 0);
     if (dist >= 40) continue;
     const between = r.start >= end ? text.slice(end, r.start) : text.slice(r.end, start);
     const newlines = (between.match(/\n/g) || []).length;
     if (newlines === 0) return { near: true, sameLine: true };
-    if (newlines === 1) return { near: true, sameLine: false };
+    if (newlines === 1) near = true;
   }
-  return { near: false, sameLine: false };
+  return { near, sameLine: false };
 }
 
 // 다중 어절 외국인 성명 후보 검증 ("응우옌 티 흐엉", "제임스 카터", "리 웨이", "사토 유키")
 function cleanForeignNameTokens(rawPhrase) {
   const tokens = rawPhrase.trim().split(/[ \t]+/).filter(Boolean);
-  while (tokens.length > 0 && NAME_TITLES.includes(tokens[tokens.length - 1])) {
+  while (tokens.length > 0 && NAME_TITLE_SET.has(tokens[tokens.length - 1])) {
     tokens.pop();
   }
   if (tokens.length < 2 || tokens.length > 4) return null;
   if (tokens.some((t) =>
-    NAME_TITLES.includes(t) ||
-    NAME_FIELD_KEYWORDS.includes(t) ||
-    COLON_NAME_LABELS.includes(t) ||
+    NAME_TITLE_SET.has(t) ||
+    NAME_FIELD_SET.has(t) ||
+    COLON_LABEL_SET.has(t) ||
     NON_NAME_LABEL_SET.has(t) ||
     ALL_FIELD_KEYWORDS.has(t) ||
     PREDICATE_SUFFIX.test(t) ||
@@ -267,8 +277,7 @@ function cleanForeignNameTokens(rawPhrase) {
     return null;
   }
   const cleaned = tokens.join(' ');
-  if (cleaned.length < 3 || cleaned.length > 15) return null;
-  return cleaned;
+  return cleaned.length >= 3 && cleaned.length <= 15 ? cleaned : null;
 }
 
 // 콜론(:) 뒤 서식 값("성명: 최다은", "동행: 왕리메이")은 뒤에 문장이 이어지지 않으면
@@ -281,6 +290,237 @@ function colonFieldVariants(raw, text, rawEnd) {
   const unambiguous = raw.replace(UNAMBIGUOUS_PARTICLES, '');
   if (unambiguous !== raw && unambiguous.length >= 2) return [unambiguous];
   return [raw];
+}
+
+// 1-a) 필드명 기반 탐지 — "성명: 홍길동", "신청인 박서준"
+function detectFieldNames(text, addVariants) {
+  for (const m of text.matchAll(FIELD_NAME_PATTERN)) {
+    const sep = m[2];
+    const raw = m[3];
+    const hasColon = /[:：=]/.test(sep);
+    if (!hasColon && INANIMATE_PARTICLE_SUFFIX.test(raw)) continue;
+    if (isNonNameWord(raw)) continue;
+
+    const valueStart = m.index + m[0].length - raw.length;
+    const variants = hasColon
+      ? colonFieldVariants(raw, text, valueStart + raw.length)
+      : nameVariants(raw);
+    const base = variants[variants.length - 1];
+    if (isNonNameWord(base) || isFollowedByOrgContext(text, valueStart + base.length)) continue;
+    // 콜론 없이 공백으로만 이어진 경우("보호자 동의", "수신자 목록")에는 성씨 구조가 맞아야 성명으로 인정
+    // 명시적 성명 필드명 뒤의 4글자 성명("동행인 왕리메이는")은 어미 검증 통과 시 허용한다.
+    if (!hasColon && !startsWithValidSurname(base, !VERB_OR_MODIFIER_SUFFIX.test(raw))) continue;
+
+    let score = hasColon ? 0.75 : 0.65;
+    if (startsWithValidSurname(base, hasColon)) score += 0.15;
+    addVariants(valueStart, variants, score, 'CONTEXT', base);
+  }
+}
+
+// 1-b) 단축 라벨 + 콜론: "담당: 김서연", "통역: 왕리메이", "참석: 오세훈"
+function detectColonLabelNames(text, addVariants) {
+  for (const m of text.matchAll(COLON_NAME_PATTERN)) {
+    const raw = m[2];
+    if (isNonNameWord(raw)) continue;
+    const valueStart = m.index + m[0].length - raw.length;
+    const variants = colonFieldVariants(raw, text, valueStart + raw.length);
+    const base = variants[variants.length - 1];
+    if (isNonNameWord(base) || isFollowedByOrgContext(text, valueStart + base.length)) continue;
+
+    let score = 0.75;
+    if (startsWithValidSurname(base, true)) score += 0.15;
+    addVariants(valueStart, variants, score, 'CONTEXT', base);
+  }
+}
+
+// 1-c) 단독 라벨 줄 + 다음 줄 성명 (XLSX 셀 추출 등: "성명\n홍길동")
+function detectLineLabelNames(text, addResult) {
+  for (const m of text.matchAll(LINE_LABEL_NAME_PATTERN)) {
+    const raw = m[2];
+    if (isNonNameWord(raw) || !startsWithValidSurname(raw, false)) continue;
+    const valueStart = m.index + m[0].length - raw.length;
+    addResult(valueStart, valueStart + raw.length, 0.8, 'CONTEXT', raw);
+  }
+}
+
+// 1-d) 명시적 라벨 + 콜론 뒤의 다중 어절 외국인 성명 ("상담자: 응우옌 티 흐엉", "통역: 제임스 카터")
+function detectForeignColonNames(text, addResult) {
+  for (const m of text.matchAll(FOREIGN_COLON_NAME_PATTERN)) {
+    const rawPhrase = m[2];
+    const cleaned = cleanForeignNameTokens(rawPhrase);
+    if (!cleaned) continue;
+    const valueStart = m.index + m[0].indexOf(rawPhrase);
+    addResult(valueStart, valueStart + cleaned.length, 0.85, 'CONTEXT', cleaned);
+  }
+}
+
+// 1-e) 필드명+조사 문장형 — "예금주는 최다은이다", "상담자는 배수지였고", "배석자는 이든이었다" (ANALYSIS 2.4)
+function detectFieldParticleNames(text, addVariants) {
+  for (const m of text.matchAll(FIELD_PARTICLE_PATTERN)) {
+    const raw = m[2];
+    const stripped = raw.replace(PREDICATE_SUFFIX, '');
+    if (stripped.length < 2) continue;
+    if (INANIMATE_PARTICLE_SUFFIX.test(stripped) || VERB_OR_MODIFIER_SUFFIX.test(stripped)) continue;
+    if (isNonNameWord(stripped)) continue;
+    const variants = nameVariants(stripped);
+    const base = variants[variants.length - 1];
+    if (base.length < 2 || base.length > 4) continue;
+    if (!startsWithValidSurname(base, false) || isNonNameWord(base)) continue;
+    const start = m.index + m[0].length - raw.length;
+    addVariants(start, variants, 0.65, 'CONTEXT', base);
+  }
+}
+
+// 1-f) 필드명+조사 뒤 다중 어절 외국인 성명 ("이름은 무함마드 라시드였고", "통역은 제임스 카터가")
+function detectFieldParticleForeignNames(text, addResult) {
+  for (const m of text.matchAll(FIELD_PARTICLE_FOREIGN_PATTERN)) {
+    const rawPhrase = m[2];
+    const valueStart = m.index + m[0].length - rawPhrase.length;
+    const rawTokens = rawPhrase.split(/[ \t]+/).filter(Boolean);
+    const collected = [];
+    for (const tok of rawTokens) {
+      if (FOREIGN_LEAD_STOPWORDS.has(tok) && collected.length === 0) break;
+      const predStripped = tok.replace(PREDICATE_SUFFIX, '');
+      if (predStripped !== tok) {
+        if (predStripped.length >= 1) collected.push(predStripped);
+        break;
+      }
+      const unambStripped = tok.replace(UNAMBIGUOUS_PARTICLES, '');
+      if (unambStripped !== tok) {
+        if (unambStripped.length >= 2) collected.push(unambStripped);
+        break;
+      }
+      if (collected.length >= 1 && tok.length >= 3 && AMBIGUOUS_PARTICLES.test(tok)) {
+        collected.push(tok.replace(AMBIGUOUS_PARTICLES, ''));
+        break;
+      }
+      if (VERB_OR_MODIFIER_SUFFIX.test(tok) || INANIMATE_PARTICLE_SUFFIX.test(tok)) break;
+      collected.push(tok);
+    }
+    if (collected.length < 2) continue;
+    const cleaned = cleanForeignNameTokens(collected.join(' '));
+    if (!cleaned) continue;
+    let endOffset = 0;
+    let cursor = 0;
+    for (const tok of collected) {
+      const idx = rawPhrase.indexOf(tok, cursor);
+      if (idx < 0) { endOffset = 0; break; }
+      endOffset = idx + tok.length;
+      cursor = endOffset;
+    }
+    if (endOffset > 0) {
+      addResult(valueStart, valueStart + endOffset, 0.75, 'CONTEXT', cleaned);
+    }
+  }
+}
+
+// 1-g) 다중 어절 외국인 성명 + 호칭/통역 ("응우옌 티 흐엉 씨가", "응우옌 티 흐엉 통역이었다")
+function detectForeignTitleNames(text, addResult) {
+  for (const m of text.matchAll(FOREIGN_TITLE_PATTERN)) {
+    const rawPhrase = m[1];
+    const phraseStart = m.index + m[0].indexOf(rawPhrase);
+    const tokenMatches = [...rawPhrase.matchAll(/[가-힣]+/g)];
+    let firstIdx = 0;
+    while (firstIdx < tokenMatches.length) {
+      const t = tokenMatches[firstIdx][0];
+      const isLeadNonName =
+        FOREIGN_LEAD_STOPWORDS.has(t) ||
+        NAME_STOPWORDS.has(t) ||
+        NAME_TITLES.includes(t) ||
+        NAME_FIELD_KEYWORDS.includes(t) ||
+        COLON_NAME_LABELS.includes(t) ||
+        NON_NAME_LABEL_SET.has(t) ||
+        UNAMBIGUOUS_PARTICLES.test(t) ||
+        INANIMATE_PARTICLE_SUFFIX.test(t) ||
+        VERB_OR_MODIFIER_SUFFIX.test(t) ||
+        PREDICATE_SUFFIX.test(t) ||
+        (t.length >= 2 && /[은는이가과와도만]$/.test(t) && firstIdx < tokenMatches.length - 2);
+      if (isLeadNonName) firstIdx += 1;
+      else break;
+    }
+    const kept = tokenMatches.slice(firstIdx);
+    if (kept.length < 2 || kept.length > 4) continue;
+    if (kept.some((tm) => FOREIGN_LEAD_STOPWORDS.has(tm[0]))) continue;
+    const sliceStart = phraseStart + kept[0].index;
+    const last = kept[kept.length - 1];
+    const sliceEnd = phraseStart + last.index + last[0].length;
+    const cleaned = cleanForeignNameTokens(text.slice(sliceStart, sliceEnd));
+    if (!cleaned) continue;
+    addResult(sliceStart, sliceEnd, 0.75, 'CONTEXT', cleaned);
+  }
+}
+
+// 2) 성씨 사전 + 문맥 기반 탐지 및 기확인 성명 재출현 전파
+function detectContextualNames(text, otherPiiRanges, confirmedNames, addVariants) {
+  const wordCount = new Map();
+  const candidates = [];
+
+  for (const m of text.matchAll(HANGUL_WORD)) {
+    const raw = m[0];
+    if (raw.length < 2) continue;
+    if (m.index > 0 && /[가-힣]/.test(text[m.index - 1])) continue;
+    if (INANIMATE_PARTICLE_SUFFIX.test(raw) || isNonNameWord(raw)) continue;
+
+    const variants = nameVariants(raw);
+    const base = variants[variants.length - 1];
+    if (base.length < 2 || base.length > 4 || isNonNameWord(base)) continue;
+    // 뒤가 한글이나 숫자이면 복합어·직급·코드의 일부이므로 제외 ("공업6급"의 "공업" 등)
+    if (m.index + raw.length < text.length && /[가-힣0-9]/.test(text[m.index + raw.length])) continue;
+
+    const baseEnd = m.index + base.length;
+    const after = text.slice(baseEnd, baseEnd + 10);
+    const lineStart = Math.max(0, text.lastIndexOf('\n', m.index - 1) + 1, m.index - 25);
+    const before = text.slice(lineStart, m.index);
+    const hasTitle = TITLE_PATTERN.test(after) || PRECEDING_TITLE_PATTERN.test(before);
+    if (!startsWithValidSurname(base, hasTitle)) continue;
+    if (isPrecededByNonNameLabel(text, m.index) || isFollowedByOrgContext(text, baseEnd)) continue;
+    if (/^\s*[:：=]/.test(text.slice(baseEnd, baseEnd + 3))) continue;
+
+    candidates.push({ base, variants, start: m.index, baseEnd, after, hasTitle });
+    wordCount.set(base, (wordCount.get(base) || 0) + 1);
+  }
+
+  const pendingPropagation = [];
+  for (const c of candidates) {
+    let score = c.variants[0].length === 2 ? 0.15 : 0.25;
+
+    // (a) 직위·호칭 결합 ("김서연 주무관", "박서준 씨", "신동현 님")
+    if (c.hasTitle) score += 0.35;
+
+    // (b) 사람 전용 격조사·동반 표현 또는 (c) 주격/보조사 + 인명 행위 서술어
+    if (PERSON_PARTICLE_AFTER.test(c.after)) {
+      score += 0.25;
+    } else if (/^(은|는|이|가|의)(?![가-힣])/.test(c.after)) {
+      const lineEnd = text.indexOf('\n', c.baseEnd);
+      const clauseAfter = text.slice(
+        c.baseEnd,
+        lineEnd >= 0 ? Math.min(lineEnd, c.baseEnd + 35) : c.baseEnd + 35,
+      );
+      const lineStart = Math.max(0, text.lastIndexOf('\n', c.start - 1) + 1, c.start - 20);
+      const clauseBefore = text.slice(lineStart, c.start);
+      if (PERSON_ACTION_CONTEXT.test(clauseAfter) || PERSON_ACTION_CONTEXT.test(clauseBefore)) {
+        score += 0.25;
+      }
+    }
+
+    // (d) 같은 줄(또는 인접 줄) 정형 개인정보와의 인접성
+    const piiProximity = isNearStructuredPii(text, c.start, c.baseEnd, otherPiiRanges);
+    if (piiProximity.sameLine) score += 0.25;
+    else if (piiProximity.near) score += 0.15;
+
+    if (score >= 0.4) {
+      if ((wordCount.get(c.base) || 0) >= 2) score += 0.05;
+      addVariants(c.start, c.variants, score, 'DICTIONARY', c.base);
+    } else {
+      pendingPropagation.push(c);
+    }
+  }
+
+  // (e) 문서 내 기확인된 성명의 재출현 전파
+  for (const c of pendingPropagation) {
+    if (!confirmedNames.has(c.base)) continue;
+    addVariants(c.start, c.variants, 0.45, 'DICTIONARY', c.base);
+  }
 }
 
 export function detectName(text, { otherPiiRanges = [] } = {}) {
@@ -299,174 +539,20 @@ export function detectName(text, { otherPiiRanges = [] } = {}) {
     }));
   }
 
-  // 1-a) 필드명 기반 탐지 — "성명: 홍길동", "신청인 박서준"
-  for (const m of text.matchAll(FIELD_NAME_PATTERN)) {
-    const sep = m[2];
-    const raw = m[3];
-    const hasColon = /[:：=]/.test(sep);
-    if (!hasColon && INANIMATE_PARTICLE_SUFFIX.test(raw)) continue;
-    if (isNonNameWord(raw)) continue;
-
-    const valueStart = m.index + m[0].length - raw.length;
-    const variants = hasColon
-      ? colonFieldVariants(raw, text, valueStart + raw.length)
-      : nameVariants(raw);
-    const base = variants[variants.length - 1];
-    if (isNonNameWord(base)) continue;
-    if (isFollowedByOrgContext(text, valueStart + base.length)) continue;
-
-    // 콜론 없이 공백으로만 이어진 경우("보호자 동의", "수신자 목록")에는 성씨 구조가 맞아야 성명으로 인정
-    if (!hasColon && !startsWithValidSurname(base, false)) continue;
-
-    let score = hasColon ? 0.75 : 0.65;
-    if (startsWithValidSurname(base, hasColon)) score += 0.15;
+  function addVariants(start, variants, score, method, baseName) {
     for (const word of variants) {
-      addResult(valueStart, valueStart + word.length, score, 'CONTEXT', base);
+      addResult(start, start + word.length, score, method, baseName);
     }
   }
 
-  // 1-b) 단축 라벨 + 콜론: "담당: 김서연", "통역: 왕리메이", "참석: 오세훈"
-  for (const m of text.matchAll(COLON_NAME_PATTERN)) {
-    const raw = m[2];
-    if (isNonNameWord(raw)) continue;
-    const valueStart = m.index + m[0].length - raw.length;
-    const variants = colonFieldVariants(raw, text, valueStart + raw.length);
-    const base = variants[variants.length - 1];
-    if (isNonNameWord(base)) continue;
-    if (isFollowedByOrgContext(text, valueStart + base.length)) continue;
-
-    let score = 0.75;
-    if (startsWithValidSurname(base, true)) score += 0.15;
-    for (const word of variants) {
-      addResult(valueStart, valueStart + word.length, score, 'CONTEXT', base);
-    }
-  }
-
-  // 1-c) 단독 라벨 줄 + 다음 줄 성명 (XLSX 셀 추출 등: "성명\n홍길동")
-  for (const m of text.matchAll(LINE_LABEL_NAME_PATTERN)) {
-    const raw = m[2];
-    if (isNonNameWord(raw)) continue;
-    if (!startsWithValidSurname(raw, false)) continue;
-    const valueStart = m.index + m[0].length - raw.length;
-    addResult(valueStart, valueStart + raw.length, 0.8, 'CONTEXT', raw);
-  }
-
-  // 1-d) 명시적 라벨 + 콜론 뒤의 다중 어절 외국인 성명 ("상담자: 응우옌 티 흐엉", "통역: 제임스 카터")
-  for (const m of text.matchAll(FOREIGN_COLON_NAME_PATTERN)) {
-    const rawPhrase = m[2];
-    const cleaned = cleanForeignNameTokens(rawPhrase);
-    if (!cleaned) continue;
-    const valueStart = m.index + m[0].indexOf(rawPhrase);
-    addResult(valueStart, valueStart + cleaned.length, 0.85, 'CONTEXT', cleaned);
-  }
-
-  // 1-e) 필드명+조사 문장형 — "예금주는 최다은이다", "상담자는 배수지였고" (ANALYSIS 2.4)
-  for (const m of text.matchAll(FIELD_PARTICLE_PATTERN)) {
-    const raw = m[2];
-    if (INANIMATE_PARTICLE_SUFFIX.test(raw)) continue;
-    if (VERB_OR_MODIFIER_SUFFIX.test(raw)) continue;
-    const stripped = raw.replace(PREDICATE_SUFFIX, '');
-    if (stripped.length < 2 || isNonNameWord(stripped)) continue;
-    const variants = nameVariants(stripped);
-    const base = variants[variants.length - 1];
-    if (base.length < 2 || base.length > 4) continue;
-    if (!startsWithValidSurname(base, false)) continue;
-    if (isNonNameWord(base)) continue;
-    const start = m.index + m[0].length - raw.length;
-    for (const word of variants) {
-      addResult(start, start + word.length, 0.65, 'CONTEXT', base);
-    }
-  }
-
-  // 2) 성씨 사전 + 문맥 기반 탐지
-  // 성씨로 시작한다는 것만으로는 개인정보가 아니다(한국어 일반 한자어의 상당수가 성씨 음절로 시작함).
-  // 반드시 호칭·직위, 인칭 격조사, 인명 행위 서술어, 같은 행의 정형 식별자 인접,
-  // 또는 문서 내 기확인된 성명의 재출현 중 하나 이상의 문맥 근거가 있어야 후보로 선별한다.
-  const wordCount = new Map();
-  const candidates = [];
-  for (const m of text.matchAll(HANGUL_WORD)) {
-    const raw = m[0];
-    if (raw.length < 2) continue;
-    // 앞이 한글이면 더 긴 단어의 일부이므로 제외
-    if (m.index > 0 && /[가-힣]/.test(text[m.index - 1])) continue;
-    if (INANIMATE_PARTICLE_SUFFIX.test(raw)) continue;
-    if (isNonNameWord(raw)) continue;
-
-    const variants = nameVariants(raw);
-    const base = variants[variants.length - 1];
-    if (base.length < 2 || base.length > 4) continue;
-    if (isNonNameWord(base)) continue;
-
-    // 뒤가 한글이나 숫자이면 복합어·직급·코드의 일부이므로 제외 ("공업6급"의 "공업" 등)
-    if (m.index + raw.length < text.length && /[가-힣0-9]/.test(text[m.index + raw.length])) continue;
-
-    const baseEnd = m.index + base.length;
-    const after = text.slice(baseEnd, baseEnd + 10);
-    const lineStart = Math.max(0, text.lastIndexOf('\n', m.index - 1) + 1, m.index - 25);
-    const before = text.slice(lineStart, m.index);
-    const hasTitle = TITLE_PATTERN.test(after) || PRECEDING_TITLE_PATTERN.test(before);
-    if (!startsWithValidSurname(base, hasTitle)) continue;
-    if (isPrecededByNonNameLabel(text, m.index)) continue;
-    if (isFollowedByOrgContext(text, baseEnd)) continue;
-    if (/^\s*[:：=]/.test(text.slice(baseEnd, baseEnd + 3))) continue;
-
-    candidates.push({ base, variants, start: m.index, baseEnd, after, before, hasTitle });
-    wordCount.set(base, (wordCount.get(base) || 0) + 1);
-  }
-
-  const pendingPropagation = [];
-
-  for (const c of candidates) {
-    const primaryLen = c.variants[0].length;
-    let score = primaryLen === 2 ? 0.15 : 0.25;
-
-    // (a) 직위·호칭 결합 ("김서연 주무관", "박서준 씨", "신동현 님")
-    if (c.hasTitle) score += 0.35;
-
-    // (b) 사람 전용 격조사·동반 표현 ("윤소라에게", "홍길동께서", "강태오와 함께")
-    if (PERSON_PARTICLE_AFTER.test(c.after)) {
-      score += 0.25;
-    } else if (/^(은|는|이|가|의)(?![가-힣])/.test(c.after)) {
-      // (c) 주격/보조사/관형격 + 같은 절 내 인명 행위 서술어("방문", "제출", "안내해" 등)
-      const lineEnd = text.indexOf('\n', c.baseEnd);
-      const clauseAfter = text.slice(
-        c.baseEnd,
-        lineEnd >= 0 ? Math.min(lineEnd, c.baseEnd + 35) : c.baseEnd + 35,
-      );
-      const lineStart = Math.max(0, text.lastIndexOf('\n', c.start - 1) + 1, c.start - 20);
-      const clauseBefore = text.slice(lineStart, c.start);
-      if (PERSON_ACTION_CONTEXT.test(clauseAfter) || PERSON_ACTION_CONTEXT.test(clauseBefore)) {
-        score += 0.25;
-      }
-    }
-
-    // (d) 같은 줄(또는 인접 줄) 정형 개인정보와의 인접성 (명단·대장·표)
-    const piiProximity = isNearStructuredPii(text, c.start, c.baseEnd, otherPiiRanges);
-    if (piiProximity.sameLine) {
-      score += 0.25;
-    } else if (piiProximity.near) {
-      score += 0.15;
-    }
-
-    if (score >= 0.4) {
-      if ((wordCount.get(c.base) || 0) >= 2) score += 0.05;
-      for (const word of c.variants) {
-        addResult(c.start, c.start + word.length, score, 'DICTIONARY', c.base);
-      }
-    } else {
-      pendingPropagation.push(c);
-    }
-  }
-
-  // (e) 문서 내 기확인된 성명의 재출현 전파:
-  // 단순 2회 반복("문화국", "사업소")은 성명으로 잡지 않되,
-  // 문서의 다른 위치에서 이미 성명으로 확인된 이름이 다시 나오면 함께 탐지한다.
-  for (const c of pendingPropagation) {
-    if (!confirmedNames.has(c.base)) continue;
-    for (const word of c.variants) {
-      addResult(c.start, c.start + word.length, 0.45, 'DICTIONARY', c.base);
-    }
-  }
+  detectFieldNames(text, addVariants);
+  detectColonLabelNames(text, addVariants);
+  detectLineLabelNames(text, addResult);
+  detectForeignColonNames(text, addResult);
+  detectFieldParticleNames(text, addVariants);
+  detectFieldParticleForeignNames(text, addResult);
+  detectForeignTitleNames(text, addResult);
+  detectContextualNames(text, otherPiiRanges, confirmedNames, addVariants);
 
   return results;
 }

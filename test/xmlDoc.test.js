@@ -1,6 +1,8 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
 import { parseZipDocument, buildZipResult, restoreZipDocument } from '../src/parsers/xmlDoc.js';
+import { analyze } from '../src/core/analyzer.js';
 import { detectAll, resetIdCounter } from '../src/detect/engine.js';
 import { applyToText } from '../src/core/deidentify.js';
 import { buildMappingTable } from '../src/core/mappingTable.js';
@@ -129,6 +131,93 @@ describe('XLSX 처리 (기술명세서 Ⅳ-4)', () => {
     expect(sheet).toContain('t="inlineStr"');
     expect(sheet).toContain('<is><t>[주민번호_');
     expect(sheet).toContain('<c r="A1" t="s"><v>0</v></c>');
+  });
+
+  it('06_숫자셀_근태기록.xlsx의 모든 성명(2글자·외국인 포함)과 전화번호(국제전화·숫자셀 포함)를 누락 없이 비식별화한다', async () => {
+    const bytes = readFileSync(new URL('./fixtures/documents/06_숫자셀_근태기록.xlsx', import.meta.url));
+    const parsed = parseZipDocument(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), 'xlsx');
+    resetIdCounter();
+    const candidates = analyze(parsed);
+
+    const names = candidates.filter((c) => c.type === 'PERSON_NAME').map((c) => c.originalText);
+    const phones = candidates.filter((c) => c.type === 'PHONE_MOBILE').map((c) => c.originalText);
+    const rrns = candidates.filter((c) => c.type === 'RRN').map((c) => c.originalText);
+
+    // 7명 전원 탐지 (최다은은 본문 메모 포함 2회)
+    for (const expectedName of ['최다은', '한결', '응우옌 티 흐엉', '제임스 카터', '무함마드 라시드', '박솔', '이든']) {
+      expect(names).toContain(expectedName);
+    }
+    // 비개인정보 오탐 방지
+    for (const nonPii of ['인라인', '문자열', '휴대전화 아래 숫자셀 참고', '작업자', '연결처']) {
+      expect(candidates.map((c) => c.originalText)).not.toContain(nonPii);
+    }
+    // 전화번호 5건(국제전화·숫자셀 포함) + 주민번호 1건
+    for (const expectedPhone of ['010-2345-6789', '010-3456-7890', '+82-10-9876-5432', '010 9999 0000', '1098765432']) {
+      expect(phones).toContain(expectedPhone);
+    }
+    expect(rrns).toContain('9001011234567');
+
+    // 기본 정책으로 비식별화 후 원문 잔존 여부 및 마스킹 형식 검증
+    const session = new WorkSession();
+    const { applied } = applyToText(parsed.text, candidates, session);
+    const blob = buildZipResult(parsed, applied);
+    const out = unzipSync(new Uint8Array(await blob.arrayBuffer()));
+    const combinedXml = strFromU8(out['xl/sharedStrings.xml']) + '\n' + strFromU8(out['xl/worksheets/sheet1.xml']);
+
+    for (const secret of [
+      '최다은', '한결', '응우옌 티 흐엉', '제임스 카터', '무함마드 라시드', '박솔', '이든',
+      '+82-10-9876-5432', '1098765432', '9001011234567',
+    ]) {
+      expect(combinedXml).not.toContain(secret);
+    }
+    expect(combinedXml).toContain('+82-10-****-5432');
+    expect(combinedXml).toContain('10****5432');
+    expect(combinedXml).toContain('휴대전화 아래 숫자셀 참고');
+  });
+
+  it('미등록 헤더 XLSX에서도 같은 열의 기탐지 패턴으로 나머지 성명과 숫자셀 전화번호를 추론한다', () => {
+    const workbook = `<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets><sheet name="명단" sheetId="1"/></sheets></workbook>`;
+    const sharedStrings = `<?xml version="1.0"?><sst count="10" uniqueCount="10"><si><t>항목A</t></si><si><t>항목B</t></si><si><t>김철수</t></si><si><t>010-1234-5678</t></si><si><t>한결</t></si><si><t>010-2222-3333</t></si><si><t>응우옌 티 흐엉</t></si><si><t>이든</t></si><si><t>박솔</t></si><si><t>비고없음</t></si></sst>`;
+    const sheet = `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
+      <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>
+      <row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2" t="s"><v>3</v></c></row>
+      <row r="3"><c r="A3" t="s"><v>4</v></c><c r="B3" t="s"><v>5</v></c></row>
+      <row r="4"><c r="A4" t="s"><v>6</v></c><c r="B4"><v>1098765432</v></c></row>
+      <row r="5"><c r="A5" t="s"><v>7</v></c><c r="B5" t="s"><v>9</v></c></row>
+    </sheetData></worksheet>`;
+    const buf = zipSync({
+      '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types/>'),
+      'xl/workbook.xml': strToU8(workbook),
+      'xl/sharedStrings.xml': strToU8(sharedStrings),
+      'xl/worksheets/sheet1.xml': strToU8(sheet),
+    }).buffer;
+
+    const parsed = parseZipDocument(buf, 'xlsx');
+    resetIdCounter();
+    const candidates = analyze(parsed);
+    const names = candidates.filter((c) => c.type === 'PERSON_NAME').map((c) => c.originalText);
+    const phones = candidates.filter((c) => c.type === 'PHONE_MOBILE').map((c) => c.originalText);
+
+    expect(names).toEqual(expect.arrayContaining(['김철수', '한결', '응우옌 티 흐엉', '이든']));
+    expect(phones).toEqual(expect.arrayContaining(['010-1234-5678', '010-2222-3333', '1098765432']));
+    expect(phones).not.toContain('비고없음');
+  });
+
+  it('xl/styles.xml의 사용자 지정 전화번호 숫자 서식(000-0000-0000)을 해석해 숫자셀을 탐지한다', () => {
+    const workbook = `<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets><sheet name="시트1" sheetId="1"/></sheets></workbook>`;
+    const styles = `<?xml version="1.0"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="000-0000-0000"/></numFmts><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="164"/></cellXfs></styleSheet>`;
+    const sheet = `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" s="1"><v>1098765432</v></c></row></sheetData></worksheet>`;
+    const buf = zipSync({
+      '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types/>'),
+      'xl/workbook.xml': strToU8(workbook),
+      'xl/styles.xml': strToU8(styles),
+      'xl/worksheets/sheet1.xml': strToU8(sheet),
+    }).buffer;
+
+    const parsed = parseZipDocument(buf, 'xlsx');
+    resetIdCounter();
+    const candidates = analyze(parsed);
+    expect(candidates.some((c) => c.type === 'PHONE_MOBILE' && c.originalText === '1098765432')).toBe(true);
   });
 });
 

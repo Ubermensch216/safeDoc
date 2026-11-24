@@ -6,8 +6,6 @@
 // 어떤 규칙이 왜 실패하는지는 test/fixtures/documents/정답지.md 에 근거와 함께 기록된다.
 //
 // 외부 의존성 없이 프로젝트에 이미 있는 fflate만 사용한다.
-// (기존 createTestDocuments.py는 python-docx·reportlab·한글 설치 템플릿이 필요하고,
-//  createTestXlsx.mjs는 사내 전용 패키지가 필요해 재현이 어렵다)
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

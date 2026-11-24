@@ -10,14 +10,15 @@ export function maskPartial(type, text) {
     }
     case 'PHONE_MOBILE':
     case 'PHONE_LANDLINE': {
-      // 010-1234-5678 → 010-****-5678 (가운데 그룹 마스킹)
-      const parts = text.split(/([-.\s()]+)/);
-      const digitGroups = parts.filter((p) => /^\d+$/.test(p));
+      // 010-1234-5678 → 010-****-5678, +82-10-9876-5432 → +82-10-****-5432 (가운데 그룹 마스킹)
+      const parts = text.split(/([-.\s_()]+)/);
+      const isPhoneGroup = (p) => /^(?:\d+|[공영일이삼사오육칠팔구]+)$/.test(p);
+      const digitGroups = parts.filter(isPhoneGroup);
       if (digitGroups.length >= 3) {
         let masked = '';
         let groupIdx = 0;
         for (const p of parts) {
-          if (/^\d+$/.test(p)) {
+          if (isPhoneGroup(p)) {
             groupIdx += 1;
             masked += groupIdx === digitGroups.length - 1 ? '*'.repeat(p.length) : p;
           } else {
@@ -26,9 +27,15 @@ export function maskPartial(type, text) {
         }
         return masked;
       }
-      // 구분자가 없으면 가운데 4자리 마스킹
+      // 구분자가 없으면 뒤 4자리를 남기고 바로 앞 3~4자리 마스킹 (1098765432 → 10****5432)
+      if (text.length >= 10) {
+        return text.slice(0, -8) + '****' + text.slice(-4);
+      }
+      if (text.length === 9) {
+        return text.slice(0, -7) + '***' + text.slice(-4);
+      }
       const mid = Math.floor(text.length / 2);
-      return text.slice(0, mid - 2) + '****' + text.slice(mid + 2);
+      return text.slice(0, Math.max(0, mid - 2)) + '****' + text.slice(mid + 2);
     }
     case 'EMAIL': {
       // example@domain.com → ex*****@domain.com
@@ -38,9 +45,13 @@ export function maskPartial(type, text) {
     }
     case 'RRN':
     case 'FOREIGNER_NO': {
-      // 900101-1234567 → 900101-*******
+      // 900101-1234567 → 900101-*******, 900101 - 1234567 → 900101 - *******
       const sep = text.indexOf('-');
-      if (sep > 0) return text.slice(0, sep + 1) + '*'.repeat(text.length - sep - 1);
+      if (sep > 0) {
+        const afterSep = text.slice(sep + 1);
+        const leadWs = afterSep.match(/^\s*/)[0];
+        return text.slice(0, sep + 1) + leadWs + '*'.repeat(afterSep.length - leadWs.length);
+      }
       return text.slice(0, 6) + '*'.repeat(text.length - 6);
     }
     case 'ACCOUNT_NO':

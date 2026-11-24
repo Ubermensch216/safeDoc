@@ -1,5 +1,7 @@
 // DOM 공통 도우미
 
+import { AppError } from '../core/errors.js';
+
 export const $ = (sel) => document.querySelector(sel);
 export const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
@@ -20,6 +22,21 @@ export function toast(message, isError = false) {
   el.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.hidden = true; }, 3500);
+}
+
+// 오류 표시 (개인정보 원문 미포함, NFR-003)
+export function showError(err) {
+  const message = err instanceof AppError ? err.message : '처리 중 오류가 발생했습니다. 다시 시도해 주십시오.';
+  toast(message, true);
+}
+
+// 보조기술 전용 알림. 토스트와 달리 화면에는 나타나지 않는다.
+export function announce(message) {
+  const region = $('#live-region');
+  if (!region) return;
+  region.textContent = '';
+  // 같은 문구가 연속으로 오면 읽지 않는 판독기가 있어 한 틱 비운 뒤 넣는다
+  setTimeout(() => { region.textContent = message; }, 50);
 }
 
 export function showScreen(id) {
