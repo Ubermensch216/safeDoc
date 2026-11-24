@@ -1,4 +1,6 @@
-// 설정 탭 제어 — 처리 정책·AI 엔진·사용자 정의 규칙·초기화
+// 설정·관리 제어
+// - 오른쪽 위 톱니바퀴 팝업: AI 엔진, 기본값 복원
+// - 관리 화면: 처리 정책, 사용자 정의 규칙 (원본 복원은 restoreController가 담당)
 
 import { PII_TYPES, ACTION_LABELS } from '../detect/types.js';
 import { checkAvailability, DEFAULT_ENDPOINT, DEFAULT_MODEL } from '../ai/ollamaClient.js';
@@ -84,10 +86,38 @@ export function createSettingsController({ session, onPoliciesChanged, onAiSetti
     });
   }
 
+  // 톱니바퀴 버튼으로 여닫는 팝업. 바깥 클릭·Esc·포커스 이탈로 닫힌다.
+  function setPopoverOpen(open, { restoreFocus = false } = {}) {
+    const button = $('#btn-settings');
+    const popover = $('#settings-popover');
+    if (popover.hidden === !open) return;
+    popover.hidden = !open;
+    button.setAttribute('aria-expanded', String(open));
+    if (open) popover.querySelector('button, input')?.focus();
+    else if (restoreFocus) button.focus();
+  }
+
+  function bindPopover() {
+    const popover = $('#settings-popover');
+    $('#btn-settings').addEventListener('click', () => setPopoverOpen(popover.hidden));
+    document.addEventListener('mousedown', (e) => {
+      if (!popover.hidden && !e.target.closest('.top-actions')) setPopoverOpen(false);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || popover.hidden) return;
+      e.preventDefault();
+      setPopoverOpen(false, { restoreFocus: true });
+    });
+    popover.addEventListener('focusout', (e) => {
+      if (e.relatedTarget && !e.relatedTarget.closest('.top-actions')) setPopoverOpen(false);
+    });
+  }
+
   function bind() {
     syncAiInputs();
     renderPolicyList();
     bindNavigation();
+    bindPopover();
 
     $('#policy-list').addEventListener('change', (e) => {
       const type = e.target.dataset.type;
@@ -170,6 +200,7 @@ export function createSettingsController({ session, onPoliciesChanged, onAiSetti
       renderRuleList();
       onPoliciesChanged();
       onAiSettingsChanged();
+      setPopoverOpen(false, { restoreFocus: true });
       toast('설정을 초기 상태로 되돌렸습니다.');
     });
   }
@@ -178,5 +209,6 @@ export function createSettingsController({ session, onPoliciesChanged, onAiSetti
     bind,
     getAiSettings: () => aiSettings,
     getUserRules: () => userRules,
+    closePopover: () => setPopoverOpen(false),
   };
 }

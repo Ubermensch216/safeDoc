@@ -39,28 +39,47 @@ export function announce(message) {
   setTimeout(() => { region.textContent = message; }, 50);
 }
 
+// 작업 단계 표시줄 (1 문서 준비 → 2 규칙 기반 탐지 → 3 AI 탐지 → 4 개인정보 검토 → 5 처리 확인 → 6 완료)
+export const WORKFLOW_STEPS = ['prepare', 'rules', 'ai', 'review', 'confirm', 'complete'];
+
+// AI를 쓰지 않았거나 중단·실패해 실제로 수행되지 않은 단계. 완료(✓)와 구분해 '–'로 표시한다.
+let skippedSteps = new Set();
+
+/**
+ * 현재 단계를 표시한다. skipped를 넘기면 건너뛴 단계 목록을 교체하고, 생략하면 이전 값을 유지한다.
+ */
+export function setWorkflowStep(step, { skipped } = {}) {
+  if (skipped) skippedSteps = new Set(skipped);
+  const current = WORKFLOW_STEPS.indexOf(step);
+  $$('#workflow-steps .step').forEach((item, index) => {
+    const passed = index < current;
+    const isSkipped = passed && skippedSteps.has(item.dataset.step);
+    item.classList.toggle('current', index === current);
+    item.classList.toggle('done', passed && !isSkipped);
+    item.classList.toggle('skipped', isSkipped);
+    if (index === current) item.setAttribute('aria-current', 'step');
+    else item.removeAttribute('aria-current');
+  });
+}
+
 export function showScreen(id) {
   $$('#tab-deidentify .screen').forEach((s) => s.classList.remove('active'));
   const screen = $(`#${id}`);
   screen.classList.add('active');
 
+  // 검토 화면은 AI 탐지 중에는 3단계(AI 탐지), 끝난 뒤에는 4단계(개인정보 검토)로 표시한다
+  const reviewStep = screen.classList.contains('ai-running') ? 'ai' : 'review';
   const screenMeta = {
     'screen-main': { step: 'prepare', title: '새 비식별 작업' },
-    'screen-analyze': { step: 'analyze', title: '자동 분석' },
-    'screen-review': { step: 'review', title: '개인정보 검토' },
+    'screen-analyze': { step: 'rules', title: '규칙 기반 탐지' },
+    'screen-review': { step: reviewStep, title: reviewStep === 'ai' ? 'AI 탐지' : '개인정보 검토' },
     'screen-confirm': { step: 'confirm', title: '처리 확인' },
     'screen-result': { step: 'complete', title: '완료' },
   };
   const meta = screenMeta[id];
   if (meta) {
-    const order = ['prepare', 'analyze', 'review', 'confirm', 'complete'];
-    const current = order.indexOf(meta.step);
-    $$('#workflow-steps .step').forEach((item, index) => {
-      item.classList.toggle('current', index === current);
-      item.classList.toggle('done', index < current);
-      if (index === current) item.setAttribute('aria-current', 'step');
-      else item.removeAttribute('aria-current');
-    });
+    // 새 작업을 시작하면 이전 작업의 '건너뜀' 표시를 지운다
+    setWorkflowStep(meta.step, meta.step === 'prepare' ? { skipped: [] } : {});
     const title = $('#page-title');
     if (title) title.textContent = meta.title;
   }

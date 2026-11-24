@@ -4,19 +4,54 @@ import { ensureReviewStates } from '../core/reviewState.js';
 import { checkAvailability } from '../ai/ollamaClient.js';
 import { runAiDetection, createAiStats, estimateChunks, DEFAULT_MAX_CHUNKS } from '../ai/aiDetect.js';
 import { AiRunLifecycle } from '../ai/lifecycle.js';
-import { $, toast, showError, announce } from './dom.js';
+import { $, toast, showError, announce, setWorkflowStep } from './dom.js';
 
 export class AiController {
-  constructor({ session, getSettings, onSyncReview, onSchedulePreview, onRenderPreviewNow }) {
+  constructor({ session, getSettings, onSyncReview, onSchedulePreview, onRenderPreviewNow, onReadOnlyChange }) {
     this.session = session;
     this.getSettings = getSettings;
     this.onSyncReview = onSyncReview;
     this.onSchedulePreview = onSchedulePreview;
     this.onRenderPreviewNow = onRenderPreviewNow;
+    this.onReadOnlyChange = onReadOnlyChange || (() => {});
 
     this.lifecycle = new AiRunLifecycle();
     this.stats = null;
     this.availability = { available: false, reason: 'unknown' };
+    // 3단계(AI 탐지) 진행 중 여부. 이 동안 검토 화면은 읽기 전용이다.
+    this.phaseActive = false;
+  }
+
+  // 3단계(AI 탐지) 시작: 단계 표시를 바꾸고 검토 화면을 읽기 전용으로 잠근다.
+  #enterPhase() {
+    this.phaseActive = true;
+    const screen = $('#screen-review');
+    screen.classList.add('ai-running');
+    const statusBox = $('#ai-status');
+    statusBox.hidden = false;
+    statusBox.setAttribute('aria-busy', 'true');
+    $('#ai-progress').style.width = '0%';
+    $('#ai-status-text').textContent = 'AI 엔진 확인 중…';
+    this.onReadOnlyChange(true);
+    if (screen.classList.contains('active')) setWorkflowStep('ai', { skipped: [] });
+  }
+
+  // 3단계 종료: 검토 화면을 풀고 4단계(개인정보 검토)로 넘어간다.
+  // skipped=true면 AI가 끝까지 수행되지 않았음(중단·사용 불가·오류)을 3단계에 '–'로 표시한다.
+  #exitPhase({ skipped }) {
+    if (!this.phaseActive) return;
+    this.phaseActive = false;
+    const screen = $('#screen-review');
+    screen.classList.remove('ai-running');
+    const statusBox = $('#ai-status');
+    statusBox.hidden = true;
+    statusBox.setAttribute('aria-busy', 'false');
+    this.onReadOnlyChange(false);
+    if (screen.classList.contains('active')) {
+      setWorkflowStep('review', { skipped: skipped ? ['ai'] : [] });
+      const title = $('#page-title');
+      if (title) title.textContent = '개인정보 검토';
+    }
   }
 
   resetStats() {
@@ -61,9 +96,7 @@ export class AiController {
 
   async stop({ wait = false } = {}) {
     const stopped = this.lifecycle.stop({ wait });
-    const statusBox = $('#ai-status');
-    statusBox.hidden = true;
-    statusBox.setAttribute('aria-busy', 'false');
+    this.#exitPhase({ skipped: true });
     if (!wait) return null;
     const stats = await stopped;
     if (stats) this.stats = stats;
@@ -72,12 +105,17 @@ export class AiController {
 
   startPass() {
     const settings = this.getSettings();
-    if (!settings.enabled) return Promise.resolve(null);
+    if (!settings.enabled) {
+      // AI를 쓰지 않으면 3단계를 건너뛰고 바로 검토를 시작한다
+      if ($('#screen-review').classList.contains('active')) setWorkflowStep('review', { skipped: ['ai'] });
+      return Promise.resolve(null);
+    }
     const parsed = this.session.parsed;
     const candidates = this.session.candidates;
     if (!parsed) return Promise.resolve(null);
 
     const run = this.lifecycle.begin();
+    this.#enterPhase();
     const initialStats = createAiStats(parsed.text, {
       model: settings.model,
       maxChunks: DEFAULT_MAX_CHUNKS,
@@ -98,6 +136,7 @@ export class AiController {
         toast(`${this.availability.message || 'AI 탐지를 사용할 수 없습니다.'} 규칙 기반 결과만 표시합니다.`);
       }
       this.lifecycle.clear(run);
+      this.#exitPhase({ skipped: true });
       return null;
     }
 
@@ -110,6 +149,7 @@ export class AiController {
       );
       if (!ok) {
         this.lifecycle.clear(run);
+        this.#exitPhase({ skipped: true });
         return null;
       }
     }
@@ -121,9 +161,6 @@ export class AiController {
       return initialStats;
     }
 
-    const statusBox = $('#ai-status');
-    statusBox.hidden = false;
-    statusBox.setAttribute('aria-busy', 'true');
     this.setBadge('busy', 'AI 탐지 중…');
     this.#updateProgress(0, Math.min(chunkCount, DEFAULT_MAX_CHUNKS), 0);
 
@@ -156,8 +193,8 @@ export class AiController {
       return initialStats;
     } finally {
       if (this.lifecycle.isCurrent(run) && this.session.parsed === parsed) {
-        statusBox.hidden = true;
-        statusBox.setAttribute('aria-busy', 'false');
+        // 3단계 종료 → 4단계(개인정보 검토) 활성화. AI가 끝까지 끝나지 못했으면 3단계를 '–'로 표시한다.
+        this.#exitPhase({ skipped: !this.stats?.completed });
         this.onRenderPreviewNow(parsed.text, candidates);
         // AI 완료 시점에만 한 번 재정렬한다 (청크마다 재정렬하면 카드가 계속 움직임)
         this.onSyncReview({ resort: true });
@@ -174,7 +211,7 @@ export class AiController {
       if (this.stats.addedCount > 0) {
         toast(`AI가 규칙이 놓친 개인정보 ${this.stats.addedCount}건을 추가로 찾았습니다.`);
       }
-      announce(`AI 탐지 완료. ${this.stats.addedCount}건을 추가로 찾았습니다. 후보 총 ${this.session.candidates.length}건.`);
+      announce(`AI 탐지 완료. ${this.stats.addedCount}건을 추가로 찾았습니다. 후보 총 ${this.session.candidates.length}건. 이제 개인정보 검토를 시작할 수 있습니다.`);
     } else if (this.stats.stopReason === 'aborted') {
       this.setBadge('off', 'AI 중단됨');
       announce('AI 탐지를 중단했습니다.');

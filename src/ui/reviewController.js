@@ -13,6 +13,20 @@ const PREVIEW_SCROLL_KEYS = new Set([
 const POPOVER_GAP = 6;
 const POPOVER_EDGE = 8;
 
+// AI 탐지(3단계) 중에는 후보를 바꾸는 조작을 막는다. 보기·이동·필터·정렬은 허용한다.
+// 정적 조작 영역은 inert로, 표·상세 패널처럼 다시 그려지는 영역은 이벤트 가로채기로 막는다.
+const READ_ONLY_INERT_SELECTORS = [
+  '.doc-tools',
+  '#btn-undo',
+  '#btn-to-confirm',
+  '#selection-popover',
+  '#bulk-action',
+  '#filter-actions [data-bulk="process"]',
+  '#filter-actions [data-bulk="exclude"]',
+];
+const READ_ONLY_BLOCKED_CONTROLS = '.c-decision, .c-same, .c-type, .c-action';
+const READ_ONLY_NAV_KEYS = new Set(['j', 'k', 'arrowdown', 'arrowup']);
+
 export class ReviewController {
   #inspectorHtml = '';
 
@@ -24,6 +38,7 @@ export class ReviewController {
 
     this.activeFilter = { type: null, status: 'all' };
     this.manualSeq = 0;
+    this.readOnly = false;
 
     this.listView = new CandidateListView($('#candidate-list'));
     this.highlighter = new PreviewHighlighter($('#preview'), {
@@ -39,6 +54,32 @@ export class ReviewController {
     this.#bindManualAddEvents();
     this.#bindActionButtons();
     this.#bindKeyboard();
+    this.#bindReadOnlyGuard();
+  }
+
+  // 읽기 전용 전환 (AI 탐지 중 true, 끝나면 false)
+  setReadOnly(on) {
+    this.readOnly = on;
+    for (const el of $$(READ_ONLY_INERT_SELECTORS.join(','))) el.inert = on;
+    $('#screen-review').toggleAttribute('data-readonly', on);
+    if (on) {
+      $('#selection-popover').hidden = true;
+      window.getSelection()?.removeAllRanges();
+    }
+  }
+
+  #bindReadOnlyGuard() {
+    const block = (e) => {
+      if (!this.readOnly) return;
+      if (e.type === 'keydown' && e.key === 'Tab') return;
+      if (!e.target.closest?.(READ_ONLY_BLOCKED_CONTROLS)) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const screen = $('#screen-review');
+    for (const type of ['click', 'mousedown', 'keydown', 'change']) {
+      screen.addEventListener(type, block, true);
+    }
   }
 
   setPolicies(policies) {
@@ -258,6 +299,7 @@ export class ReviewController {
     });
 
     const updateSelectionPopover = () => {
+      if (this.readOnly) { popover.hidden = true; return; }
       const selection = window.getSelection();
       const valid = selection && !selection.isCollapsed && selection.rangeCount > 0
         && preview.contains(selection.anchorNode) && preview.contains(selection.focusNode);
@@ -482,6 +524,10 @@ export class ReviewController {
       const activeEl = document.activeElement;
       const tag = activeEl?.tagName;
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+      // 상단의 새 작업·설정 팝업을 조작하는 중에는 검토 단축키가 끼어들지 않는다
+      if (activeEl?.closest?.('.top-actions')) return;
+      // 읽기 전용 중에는 후보 이동만 허용하고 처리·제외·되돌리기·처리방식 단축키는 막는다
+      if (this.readOnly && (e.ctrlKey || e.altKey || e.metaKey || !READ_ONLY_NAV_KEYS.has(e.key.toLowerCase()))) return;
 
       if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
         e.preventDefault();

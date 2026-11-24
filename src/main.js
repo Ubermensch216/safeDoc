@@ -70,6 +70,7 @@ function init() {
     onSyncReview: (opts) => review.sync(opts),
     onSchedulePreview: (text, candidates) => review.schedulePreview(text, candidates),
     onRenderPreviewNow: (text, candidates) => review.renderPreviewNow(text, candidates),
+    onReadOnlyChange: (on) => review.setReadOnly(on),
   });
 
   review.setPolicies(session.typePolicies);
@@ -113,6 +114,7 @@ function activateTab(btn, { focus = false } = {}) {
   });
   $$('.tab-panel').forEach((p) => p.classList.remove('active'));
   $(`#tab-${btn.dataset.tab}`).classList.add('active');
+  settings?.closePopover();
   if (focus) btn.focus();
 }
 
