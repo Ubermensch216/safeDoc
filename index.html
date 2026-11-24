@@ -53,12 +53,6 @@
             <div class="workbar-status">
               <span class="local-state">이 PC에서만 처리</span>
               <span id="ai-badge" class="security-state busy"><i aria-hidden="true"></i><span id="ai-badge-text">AI 확인 중…</span></span>
-              <div id="ai-status" class="ai-status" hidden>
-                <span class="ai-spark" aria-hidden="true">AI</span>
-                <div class="ai-status-bar" id="ai-progressbar" role="progressbar" aria-labelledby="ai-status-text" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="ai-progress" class="ai-status-fill"></div></div>
-                <span id="ai-status-text" class="ai-status-text"></span>
-                <button id="btn-cancel-ai" class="btn tiny ghost">중단</button>
-              </div>
             </div>
           </div>
 
@@ -116,6 +110,18 @@
           </div>
 
           <div id="screen-review" class="screen">
+            <div id="ai-status" class="ai-banner" hidden>
+              <span class="ai-spinner" aria-hidden="true"></span>
+              <div class="ai-banner-copy">
+                <strong>AI가 문맥 속 성명·주소를 추가로 찾고 있습니다</strong>
+                <span>규칙으로 찾은 후보는 지금 검토하셔도 됩니다. 새로 찾은 후보는 표에 자동으로 추가됩니다.</span>
+              </div>
+              <div class="ai-banner-progress">
+                <div class="ai-status-bar" id="ai-progressbar" role="progressbar" aria-labelledby="ai-status-text" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="ai-progress" class="ai-status-fill"></div></div>
+                <span id="ai-status-text" class="ai-status-text"></span>
+                <button id="btn-cancel-ai" class="btn small">AI 탐지 중단</button>
+              </div>
+            </div>
             <div class="review-layout">
               <section class="pane document-pane" aria-labelledby="doc-pane-title">
                 <header class="pane-head">
