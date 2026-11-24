@@ -77,6 +77,7 @@ export class PreviewHighlighter {
     this.windowStart = 0;
     this.text = '';
     this.candidates = [];
+    this.focusedId = null;
   }
 
   // 사용자가 미리보기에서 문자열을 드래그하는 중이면 다시 그리지 않는다
@@ -98,6 +99,7 @@ export class PreviewHighlighter {
     });
     this.el.scrollTop = top;
     this.el.scrollLeft = left;
+    if (this.focusedId) this.#markById(this.focusedId)?.classList.add('focused');
     this.onWindowChange?.({
       start: this.windowStart,
       end: Math.min(text.length, this.windowStart + PREVIEW_CHAR_LIMIT),
@@ -129,21 +131,40 @@ export class PreviewHighlighter {
     this.pending = null;
   }
 
+  #markById(id) {
+    return this.el.querySelector(`mark.pii[data-id="${CSS.escape(id)}"]`);
+  }
+
   focus(id) {
     this.el.querySelectorAll('mark.pii.focused').forEach((m) => m.classList.remove('focused'));
-    let mark = this.el.querySelector(`mark.pii[data-id="${CSS.escape(id)}"]`);
+    this.focusedId = id;
+    let mark = this.#markById(id);
     if (!mark) {
       const candidate = this.candidates.find((c) => c.id === id);
       if (candidate) {
         const start = Math.max(0, candidate.start - Math.floor(PREVIEW_CHAR_LIMIT / 2));
         this.renderNow(this.text, this.candidates, { start });
-        mark = this.el.querySelector(`mark.pii[data-id="${CSS.escape(id)}"]`);
+        mark = this.#markById(id);
       }
     }
     if (mark) {
       mark.classList.add('focused');
-      mark.scrollIntoView({ block: 'center' });
+      // scrollIntoView는 페이지까지 함께 움직이므로 본문 영역 안에서만 가운데로 옮긴다
+      const box = this.el.getBoundingClientRect();
+      const rect = mark.getBoundingClientRect();
+      this.el.scrollTop += rect.top - box.top - (box.height - rect.height) / 2;
     }
+  }
+
+  // 판단이 바뀐 후보 하나만 강조 색을 갱신한다
+  refreshMark(candidate) {
+    const mark = this.#markById(candidate.id);
+    if (!mark) return;
+    const focused = mark.classList.contains('focused');
+    mark.className = markClass(candidate) + (focused ? ' focused' : '');
+    const label = `${candidate.originalText} — ${markTitle(candidate)}`;
+    mark.title = markTitle(candidate);
+    mark.setAttribute('aria-label', label);
   }
 
   clear() {
@@ -152,6 +173,7 @@ export class PreviewHighlighter {
     this.windowStart = 0;
     this.text = '';
     this.candidates = [];
+    this.focusedId = null;
     this.onWindowChange?.({ start: 0, end: 0, total: 0 });
   }
 

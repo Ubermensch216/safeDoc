@@ -1,5 +1,7 @@
 // 비식별 처리엔진 — 치환·마스킹·삭제 (기술명세서 Ⅶ)
 
+import { PII_TYPES } from '../detect/types.js';
+
 // 부분 마스킹 규칙 (기술명세서 Ⅶ-1 예시 기반)
 export function maskPartial(type, text) {
   switch (type) {
@@ -99,6 +101,16 @@ export function computeReplacement(candidate, session) {
       return DELETE_TOKEN;
     default:
       return session.getReplacement(candidate.type, candidate.originalText);
+  }
+}
+
+// 화면 표시용 결과 예시. session.getReplacement는 일련번호를 발급하므로 여기서 호출하면 안 된다.
+export function previewReplacement(type, action, text) {
+  switch (action) {
+    case 'MASK_PART': return maskPartial(type, text);
+    case 'MASK_ALL': return maskAll(text);
+    case 'DELETE': return DELETE_TOKEN;
+    default: return `[${PII_TYPES[type]?.token || '개인정보'}_001]`;
   }
 }
 

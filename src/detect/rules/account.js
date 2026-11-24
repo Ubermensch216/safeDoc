@@ -57,5 +57,55 @@ export function detectAccount(text) {
     results.push(makeCandidate({ text, start, end, type: 'ACCOUNT_NO', baseScore: Math.min(score, 1), detectionMethod: 'CONTEXT' }));
   }
 
+  results.push(...detectSpacedAccount(text, results));
+  return results;
+}
+
+// 공백(또는 점)으로 그룹이 나뉜 계좌번호: "110 123 456789", "1002 345 678901"
+//
+// 하이픈이 없으면 일반 숫자 나열(날짜·수량·금액)과 형태로 구분되지 않는다.
+// 그래서 하이픈형(문맥 없이도 후보)과 달리 반드시 계좌 문맥을 요구한다.
+//  - 앞쪽 30자 안에 "계좌번호" 등 필드명이 있거나
+//  - 앞 10자 또는 뒤 10자 안에 은행명이 있을 것 ("110 123 456789 (신한은행)")
+// 문맥 없는 "2026 04 17 1030" 같은 숫자 나열은 후보가 되지 않는다.
+const SPACED_ACCOUNT_REGEX = /(?<![\d-])\d{2,6}(?:[  .]\d{2,8}){2,3}(?![\d-])/g;
+const MAX_ACCOUNT_DIGITS = 14;
+
+function isCardShape(groups) {
+  return groups.length === 4 && groups.every((g) => g.length === 4);
+}
+
+function detectSpacedAccount(text, existing) {
+  const results = [];
+
+  for (const m of text.matchAll(SPACED_ACCOUNT_REGEX)) {
+    const groups = m[0].split(/[  .]/);
+    // 카드번호(4-4-4-4)는 카드 규칙의 몫
+    if (isCardShape(groups)) continue;
+    // 뒤에 붙은 숫자(연도·호수 등)를 계좌번호로 삼키지 않도록 자릿수 상한까지만 취한다
+    while (groups.length > 3 && groups.join('').length > MAX_ACCOUNT_DIGITS) groups.pop();
+
+    const digits = groups.join('');
+    if (digits.length < 10 || digits.length > MAX_ACCOUNT_DIGITS) continue;
+    const start = m.index;
+    // 구분자는 한 글자이므로 남은 그룹 길이 + 구분자 수가 원문 길이다
+    const end = start + digits.length + groups.length - 1;
+
+    // 전화번호·국제전화·주민번호 형태 제외
+    if (/^01[016789]/.test(digits) || /^820?1[016789]/.test(digits)) continue;
+    if (start > 0 && text[start - 1] === '+') continue;
+    if (NON_ACCOUNT_LABEL.test(text.slice(Math.max(0, start - 16), start))) continue;
+    // 하이픈형 후보와 겹치면 중복
+    if (existing.some((c) => c.start < end && start < c.end)) continue;
+
+    const fieldScore = fieldKeywordScore(text, start, 'ACCOUNT_NO', 30);
+    const nearBank = BANK_NAMES.some((b) =>
+      text.slice(Math.max(0, start - 10), start).includes(b) || text.slice(end, end + 10).includes(b));
+    if (fieldScore === 0 && !nearBank) continue;
+
+    const score = 0.6 + fieldScore + (nearBank ? 0.25 : 0);
+    results.push(makeCandidate({ text, start, end, type: 'ACCOUNT_NO', baseScore: Math.min(score, 1), detectionMethod: 'CONTEXT' }));
+  }
+
   return results;
 }

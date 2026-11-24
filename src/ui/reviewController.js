@@ -3,22 +3,19 @@
 import { PII_TYPES, ACTION_LABELS, CONFIDENCE_LEVELS } from '../detect/types.js';
 import { REVIEW_STATES, reviewCounts, setReviewState } from '../core/reviewState.js';
 import { $, $$, toast, showScreen, textOffsetIn, renderedOffsetToSource } from './dom.js';
-import { CandidateListView } from './candidateList.js';
+import { CandidateListView, renderInspectorHtml } from './candidateList.js';
 import { PreviewHighlighter, PREVIEW_CHAR_LIMIT } from './highlight.js';
-
-const STATUS_FILTER_LABELS = {
-  pending: '확인 필요',
-  ai: 'AI 발견',
-  disputed: '오탐 의심',
-  exclude: '처리 제외',
-  manual: '수동 추가',
-};
 
 const PREVIEW_SCROLL_KEYS = new Set([
   'arrowdown', 'arrowup', 'pageup', 'pagedown', 'home', 'end', ' ',
 ]);
 
+const POPOVER_GAP = 6;
+const POPOVER_EDGE = 8;
+
 export class ReviewController {
+  #inspectorHtml = '';
+
   constructor({ session, onOpenConfirm, onCancelAnalyze, onCancelAi }) {
     this.session = session;
     this.onOpenConfirm = onOpenConfirm;
@@ -37,6 +34,7 @@ export class ReviewController {
   bind() {
     this.#bindPreviewEvents();
     this.#bindCandidateListEvents();
+    this.#bindInspectorEvents();
     this.#bindFilterEvents();
     this.#bindManualAddEvents();
     this.#bindActionButtons();
@@ -59,46 +57,54 @@ export class ReviewController {
     const candidates = this.session.candidates;
     this.listView.setPolicies(this.session.typePolicies);
     this.listView.setFilter(this.activeFilter);
+
+    // 필터나 되돌리기로 사라진 행에 커서가 남지 않게 한다
+    if (this.listView.cursorId) {
+      const current = this.#findCandidate(this.listView.cursorId);
+      if (!current || !this.listView.isVisible(current)) this.listView.cursorId = null;
+    }
     const visible = this.listView.sync(candidates, { resort });
 
     const counts = reviewCounts(candidates);
     const reviewed = counts.process + counts.exclude;
-    const badge = $('#detect-count-badge');
-    badge.textContent = `${visible}건 표시`;
-    badge.setAttribute('aria-label', `총 ${counts.total}건 중 ${visible}건 표시`);
 
     $('#review-done-count').textContent = reviewed.toLocaleString();
-    $('#review-total-count').textContent = `/ ${counts.total.toLocaleString()}`;
+    $('#review-total-count').textContent = `/ ${counts.total.toLocaleString()}건 검토`;
     $('#review-meter-fill').style.width = `${counts.total ? (reviewed / counts.total) * 100 : 100}%`;
-    $('#count-pending').textContent = counts.pending.toLocaleString();
-    $('#count-process').textContent = counts.process.toLocaleString();
-    $('#count-exclude').textContent = counts.exclude.toLocaleString();
 
     const aiCount = candidates.filter((c) => c.aiOnly).length;
     const disputedCount = candidates.filter((c) => c.aiDisputed).length;
     const manualCount = candidates.filter((c) => ['MANUAL', 'SEARCH'].includes(c.detectionMethod)).length;
 
-    $('#count-ai').textContent = aiCount.toLocaleString();
     $('#filter-count-all').textContent = counts.total;
     $('#filter-count-pending').textContent = counts.pending;
+    $('#filter-count-pending').classList.toggle('has-items', counts.pending > 0);
     $('#filter-count-ai').textContent = aiCount;
     $('#filter-count-disputed').textContent = disputedCount;
     $('#filter-count-exclude').textContent = counts.exclude;
     $('#filter-count-manual').textContent = manualCount;
     $('#review-footer-summary').innerHTML =
-      `<strong>${counts.process.toLocaleString()}개 처리</strong> · ${counts.exclude.toLocaleString()}개 제외 · ${counts.pending.toLocaleString()}개 미확인`;
-    $('#btn-to-confirm').disabled = counts.pending > 0;
+      `처리 <strong>${counts.process.toLocaleString()}</strong> · 제외 <strong>${counts.exclude.toLocaleString()}</strong> · 미확인 <strong>${counts.pending.toLocaleString()}</strong>`;
+
+    // 비활성 버튼은 이유를 말해 주지 못한다. 지금 해야 할 일을 버튼이 직접 안내한다.
+    $('#btn-to-confirm').textContent = counts.pending > 0
+      ? `미확인 ${counts.pending.toLocaleString()}건 확인하기`
+      : '처리 확인으로 이동 →';
 
     const filtered = Boolean(this.activeFilter.type || this.activeFilter.status !== 'all');
-    $('#filter-actions').hidden = !filtered;
-    if (filtered) {
-      const label = this.activeFilter.type
-        ? (PII_TYPES[this.activeFilter.type]?.label || this.activeFilter.type)
-        : STATUS_FILTER_LABELS[this.activeFilter.status];
-      $('#filter-label').textContent = `${label} ${visible}건`;
-    }
+    $('#btn-clear-filter').hidden = !filtered;
+    $('#filter-label').textContent = `표시 ${visible.toLocaleString()}건`;
+    $$('#filter-actions [data-bulk="process"], #filter-actions [data-bulk="exclude"], #bulk-action')
+      .forEach((control) => { control.disabled = visible === 0; });
 
     this.#updateReviewGap();
+    this.#renderInspector();
+  }
+
+  // 분석 직후 첫 후보를 선택해 바로 키보드로 검토할 수 있게 한다
+  selectFirst() {
+    const id = this.listView.firstVisibleId();
+    if (id) this.#selectCandidate(id);
   }
 
   reset() {
@@ -108,13 +114,35 @@ export class ReviewController {
     this.manualSeq = 0;
     $('#type-filter').value = '';
     this.#syncStatusFilterButtons('all');
-    $('#filter-actions').hidden = true;
+    $('#btn-clear-filter').hidden = true;
     $('#selection-popover').hidden = true;
     $('#search-input').value = '';
+    this.#inspectorHtml = '';
+    $('#cand-inspector').innerHTML = '';
   }
 
   #findCandidate(id) {
     return this.session.candidates.find((c) => c.id === id);
+  }
+
+  #selectCandidate(id) {
+    this.listView.setCursor(id, this.session.candidates);
+    this.highlighter.focus(id);
+    this.#renderInspector();
+  }
+
+  #renderInspector() {
+    const current = this.listView.cursorId ? this.#findCandidate(this.listView.cursorId) : null;
+    const html = renderInspectorHtml(current, this.session.typePolicies, this.session.candidates);
+    // AI 결과가 도착해도 열려 있는 선택상자가 닫히지 않도록 내용이 바뀔 때만 다시 그린다
+    if (html === this.#inspectorHtml) return;
+    this.#inspectorHtml = html;
+
+    const box = $('#cand-inspector');
+    const active = box.contains(document.activeElement) ? document.activeElement : null;
+    const refocus = ['c-type', 'c-action'].find((name) => active?.classList.contains(name));
+    box.innerHTML = html;
+    if (refocus) box.querySelector(`.${refocus}`)?.focus();
   }
 
   #pushHistory() {
@@ -134,11 +162,41 @@ export class ReviewController {
       return;
     }
     const state = JSON.parse(snapshot);
-    this.session.candidates = state.candidates;
+    // 진행 중인 AI 탐지가 같은 배열에 후보를 추가하므로 배열 자체는 유지한다
+    this.session.candidates.splice(0, this.session.candidates.length, ...state.candidates);
     this.session.manuallyAddedCount = state.manuallyAddedCount;
     this.manualSeq = state.manualSeq;
     this.sync({ resort: true });
     this.highlighter.renderNow(this.session.parsed.text, this.session.candidates);
+  }
+
+  // 판단 후 표와 문서 강조를 함께 갱신한다
+  #decide(candidate, state, { advance }) {
+    this.#pushHistory();
+    setReviewState(candidate, state);
+    const nextId = this.listView.nextPendingId(candidate.id, this.session.candidates);
+    const staysVisible = this.listView.isVisible(candidate);
+    this.sync();
+    this.highlighter.refreshMark(candidate);
+
+    if (advance && nextId) this.#selectCandidate(nextId);
+    else if (staysVisible) this.#selectCandidate(candidate.id);
+    else if (nextId) this.#selectCandidate(nextId);
+    else this.selectFirst();
+  }
+
+  #applyToMany(targets, mutate) {
+    this.#pushHistory();
+    for (const c of targets) mutate(c);
+    this.sync();
+    this.highlighter.renderNow(this.session.parsed.text, this.session.candidates);
+  }
+
+  #setStatusFilter(status) {
+    this.activeFilter.status = status;
+    this.#syncStatusFilterButtons(status);
+    this.sync();
+    if (!this.listView.cursorId) this.selectFirst();
   }
 
   #syncStatusFilterButtons(activeStatus) {
@@ -152,19 +210,15 @@ export class ReviewController {
   #updateReviewGap() {
     const box = $('#review-gap');
     const candidates = this.session.candidates;
-    const pending = candidates.filter((c) => c.reviewState === REVIEW_STATES.PENDING).length;
     const disputed = candidates.filter((c) => c.aiDisputed && !c.userModified).length;
     const lowConf = candidates.filter((c) => c.confidence < CONFIDENCE_LEVELS.MEDIUM && !c.userModified).length;
 
     const parts = [];
-    if (pending > 0) parts.push(`<strong>미확인 ${pending}건</strong>`);
-    if (disputed > 0) parts.push(`<strong>AI 오탐 의심 ${disputed}건</strong>`);
-    if (lowConf > 0) parts.push(`<strong>신뢰도 낮음 ${lowConf}건</strong>`);
+    if (disputed > 0) parts.push(`오탐 의심 ${disputed}건`);
+    if (lowConf > 0) parts.push(`신뢰도 낮음 ${lowConf}건`);
 
-    if (parts.length === 0) { box.hidden = true; return; }
-    box.hidden = false;
-    box.innerHTML = `${parts.join(' · ')}이 아직 확인되지 않았습니다. `
-      + '위 필터로 해당 항목만 모아 볼 수 있습니다. 확인 후 실행하십시오.';
+    box.hidden = parts.length === 0;
+    box.textContent = parts.length ? `주의 필요: ${parts.join(' · ')}` : '';
   }
 
   #updatePreviewWindowUi({ start, end, total }) {
@@ -185,15 +239,14 @@ export class ReviewController {
     $('#btn-preview-prev').addEventListener('click', () => this.highlighter.shiftWindow(-1));
     $('#btn-preview-next').addEventListener('click', () => this.highlighter.shiftWindow(1));
 
-    const jumpToCandidate = (mark) => {
-      this.highlighter.focus(mark.dataset.id);
-      this.listView.setCursor(mark.dataset.id, this.session.candidates);
-    };
-
     const preview = $('#preview');
+    const popover = $('#selection-popover');
+
     preview.addEventListener('click', (e) => {
+      // 드래그로 문자열을 고르는 중이면 후보 이동으로 해석하지 않는다
+      if (!window.getSelection()?.isCollapsed) return;
       const mark = e.target.closest('mark.pii');
-      if (mark) jumpToCandidate(mark);
+      if (mark) this.#selectCandidate(mark.dataset.id);
     });
     // 강조는 role="button"이므로 Enter·Space로도 동작해야 한다
     preview.addEventListener('keydown', (e) => {
@@ -201,67 +254,83 @@ export class ReviewController {
       const mark = e.target.closest?.('mark.pii');
       if (!mark) return;
       e.preventDefault();
-      jumpToCandidate(mark);
+      this.#selectCandidate(mark.dataset.id);
     });
 
     const updateSelectionPopover = () => {
       const selection = window.getSelection();
-      $('#selection-popover').hidden = !selection || selection.isCollapsed
-        || !preview.contains(selection.anchorNode) || !preview.contains(selection.focusNode);
+      const valid = selection && !selection.isCollapsed && selection.rangeCount > 0
+        && preview.contains(selection.anchorNode) && preview.contains(selection.focusNode);
+      popover.hidden = !valid;
+      if (valid) this.#positionPopover(selection.getRangeAt(0));
     };
     preview.addEventListener('mouseup', updateSelectionPopover);
     preview.addEventListener('keyup', updateSelectionPopover);
+    preview.addEventListener('scroll', () => { popover.hidden = true; });
+    // 버튼을 눌러도 문서의 선택 영역이 풀리지 않게 한다
+    $('#btn-add-selection').addEventListener('mousedown', (e) => e.preventDefault());
+    document.addEventListener('selectionchange', () => {
+      if (popover.contains(document.activeElement)) return;
+      if (window.getSelection()?.isCollapsed) popover.hidden = true;
+    });
+  }
+
+  #positionPopover(range) {
+    const popover = $('#selection-popover');
+    const wrap = popover.parentElement.getBoundingClientRect();
+    const rect = range.getBoundingClientRect();
+    const { offsetWidth: width, offsetHeight: height } = popover;
+
+    const centered = rect.left - wrap.left + rect.width / 2 - width / 2;
+    const left = Math.max(POPOVER_EDGE, Math.min(wrap.width - width - POPOVER_EDGE, centered));
+    let top = rect.bottom - wrap.top + POPOVER_GAP;
+    if (top + height > wrap.height - POPOVER_EDGE) top = rect.top - wrap.top - height - POPOVER_GAP;
+    popover.style.left = `${left}px`;
+    popover.style.top = `${Math.max(POPOVER_EDGE, top)}px`;
   }
 
   #bindCandidateListEvents() {
-    const list = $('#candidate-list');
-
-    list.addEventListener('click', (e) => {
+    $('#candidate-list').addEventListener('click', (e) => {
       const item = e.target.closest('.cand');
       if (!item) return;
       const c = this.#findCandidate(item.dataset.id);
       if (!c) return;
 
-      if (e.target.classList.contains('c-same')) {
-        // 동일값 일괄 (FR-406)
-        this.#pushHistory();
-        const targetState = c.reviewState === REVIEW_STATES.PROCESS ? REVIEW_STATES.EXCLUDE : REVIEW_STATES.PROCESS;
-        let count = 0;
-        for (const other of this.session.candidates) {
-          if (other.originalText === c.originalText && other.type === c.type) {
-            setReviewState(other, targetState);
-            other.action = c.action;
-            count += 1;
-          }
+      const decision = e.target.closest('.c-decision');
+      if (decision) {
+        const { state } = decision.dataset;
+        const byKeyboard = e.detail === 0;
+        this.#decide(c, state, { advance: false });
+        // 키보드로 누른 경우 다시 그려진 같은 버튼으로 포커스를 돌려준다
+        if (byKeyboard) {
+          this.listView.nodes.get(c.id)?.querySelector(`.c-decision[data-state="${state}"]`)?.focus();
         }
-        this.sync();
-        toast(`동일한 값 ${count}건을 ${targetState === REVIEW_STATES.PROCESS ? '처리 대상으로 지정' : '제외'}했습니다.`);
         return;
       }
+      this.#selectCandidate(c.id);
+    });
+  }
 
-      if (e.target.classList.contains('cand-toggle')) {
-        this.listView.toggleExpanded(c.id);
-        this.sync();
-        return;
-      }
+  #bindInspectorEvents() {
+    const box = $('#cand-inspector');
 
-      if (e.target.classList.contains('c-decision')) {
-        this.#pushHistory();
-        setReviewState(c, e.target.dataset.state);
-        this.sync();
-        return;
-      }
-
-      if (e.target.tagName !== 'SELECT') {
-        this.listView.setCursor(c.id, this.session.candidates);
-        this.highlighter.focus(c.id);
-      }
+    box.addEventListener('click', (e) => {
+      const button = e.target.closest('.c-same');
+      if (!button) return;
+      const c = this.#findCandidate(this.listView.cursorId);
+      if (!c) return;
+      // 동일값 일괄 (FR-406)
+      const targetState = button.dataset.state;
+      const targets = this.session.candidates.filter((o) => o.originalText === c.originalText && o.type === c.type);
+      this.#applyToMany(targets, (other) => {
+        setReviewState(other, targetState);
+        other.action = c.action;
+      });
+      toast(`같은 값 ${targets.length}건을 ${targetState === REVIEW_STATES.PROCESS ? '처리 대상으로 지정' : '제외'}했습니다.`);
     });
 
-    list.addEventListener('change', (e) => {
-      const item = e.target.closest('.cand');
-      if (!item) return;
-      const c = this.#findCandidate(item.dataset.id);
+    box.addEventListener('change', (e) => {
+      const c = this.#findCandidate(this.listView.cursorId);
       if (!c) return;
       if (e.target.classList.contains('c-type')) {
         // 유형 변경 (FR-405)
@@ -278,75 +347,70 @@ export class ReviewController {
         this.sync();
       }
     });
+
+    box.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') document.activeElement?.blur();
+    });
   }
 
   #bindFilterEvents() {
     $('#status-filters').addEventListener('click', (e) => {
       const button = e.target.closest('.status-filter');
-      if (!button) return;
-      this.activeFilter.status = button.dataset.status;
-      this.#syncStatusFilterButtons(button.dataset.status);
-      this.sync();
+      if (button) this.#setStatusFilter(button.dataset.status);
     });
 
     $('#type-filter').addEventListener('change', (e) => {
       this.activeFilter.type = e.target.value || null;
       this.sync();
+      if (!this.listView.cursorId) this.selectFirst();
     });
 
-    // 필터된 항목 일괄 처리 (FR-406)
+    // 표시된 항목 일괄 처리 (FR-406)
     $('#filter-actions').addEventListener('click', (e) => {
-      const action = e.target.dataset.bulk;
-      if (!action) return;
+      const button = e.target.closest('[data-bulk]');
+      if (!button) return;
+      const action = button.dataset.bulk;
       if (action === 'clear') {
-        this.activeFilter = { type: null, status: 'all' };
+        this.activeFilter.type = null;
         $('#type-filter').value = '';
-        this.#syncStatusFilterButtons('all');
-        this.sync();
+        this.#setStatusFilter('all');
         return;
       }
-      this.#pushHistory();
       const targets = this.session.candidates.filter((c) => this.listView.isVisible(c));
       const targetState = action === 'process' ? REVIEW_STATES.PROCESS : REVIEW_STATES.EXCLUDE;
-      for (const c of targets) setReviewState(c, targetState);
-      this.sync();
+      // 제외는 결과 문서에 개인정보 원문을 남기는 판단이므로 한 번 더 확인한다
+      if (action === 'exclude' && !window.confirm(
+        `표시된 ${targets.length}건을 모두 제외합니다.\n제외한 항목은 결과 문서에 원문 그대로 남습니다.\n\n계속하시겠습니까?`,
+      )) return;
+      this.#applyToMany(targets, (c) => setReviewState(c, targetState));
+      if (!this.listView.cursorId) this.selectFirst();
       toast(`${targets.length}건을 ${action === 'process' ? '처리 대상으로 지정' : '제외'}했습니다.`);
     });
 
     $('#bulk-action').addEventListener('change', (e) => {
-      this.#pushHistory();
+      const { value } = e.target;
+      e.target.value = '';
+      if (!value) return;
       const targets = this.session.candidates.filter((c) => this.listView.isVisible(c));
-      for (const c of targets) {
-        c.action = e.target.value;
+      this.#applyToMany(targets, (c) => {
+        c.action = value;
         c.userModified = true;
-      }
-      this.sync();
-      toast(`${targets.length}건의 처리방식을 변경했습니다.`);
+      });
+      toast(`${targets.length}건의 처리방식을 ${ACTION_LABELS[value]}(으)로 변경했습니다.`);
     });
 
     $('#sort-mode').addEventListener('change', (e) => {
       this.listView.setSort(e.target.value);
       this.sync({ resort: true });
     });
-
-    $('#btn-select-all').addEventListener('click', () => {
-      this.#pushHistory();
-      this.session.candidates.forEach((c) => setReviewState(c, REVIEW_STATES.PROCESS));
-      this.sync();
-    });
-    $('#btn-deselect-all').addEventListener('click', () => {
-      this.#pushHistory();
-      this.session.candidates.forEach((c) => setReviewState(c, REVIEW_STATES.EXCLUDE));
-      this.sync();
-    });
   }
 
   #bindManualAddEvents() {
     // 검색 일괄 지정 (FR-408)
-    $('#btn-search-add').addEventListener('click', () => {
+    const addBySearch = () => {
       const term = $('#search-input').value;
       if (!term) {
-        toast('검색할 문자열을 입력하십시오.', true);
+        toast('찾을 문자열을 입력하십시오.', true);
         return;
       }
       this.#pushHistory();
@@ -354,18 +418,23 @@ export class ReviewController {
       this.sync();
       this.highlighter.renderNow(this.session.parsed.text, this.session.candidates);
       toast(added > 0 ? `"${term}" ${added}건을 개인정보로 지정했습니다.` : '이미 지정되었거나 문서에 없는 문자열입니다.', added === 0);
+      if (added > 0) $('#search-input').value = '';
+    };
+    $('#btn-search-add').addEventListener('click', addBySearch);
+    $('#search-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); addBySearch(); }
     });
 
     // 선택 영역 수동 추가 (FR-404)
     $('#btn-add-selection').addEventListener('click', () => {
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed) {
-        toast('미리보기에서 추가할 문자열을 먼저 드래그하십시오.', true);
+        toast('문서에서 추가할 문자열을 먼저 드래그하십시오.', true);
         return;
       }
       const preview = $('#preview');
       if (!preview.contains(sel.anchorNode) || !preview.contains(sel.focusNode)) {
-        toast('문서 미리보기 안의 문자열만 추가할 수 있습니다.', true);
+        toast('문서 본문 안의 문자열만 추가할 수 있습니다.', true);
         return;
       }
       let start = textOffsetIn(preview, sel.anchorNode, sel.anchorOffset);
@@ -391,10 +460,11 @@ export class ReviewController {
     $('#btn-to-confirm').addEventListener('click', () => {
       const counts = reviewCounts(this.session.candidates);
       if (counts.pending > 0) {
-        this.activeFilter.status = 'pending';
-        this.#syncStatusFilterButtons('pending');
-        this.sync();
-        toast(`미확인 후보 ${counts.pending}건을 먼저 확인해 주십시오.`, true);
+        this.activeFilter.type = null;
+        $('#type-filter').value = '';
+        this.#setStatusFilter('pending');
+        this.selectFirst();
+        toast(`미확인 후보 ${counts.pending}건을 먼저 판단해 주십시오.`, true);
         return;
       }
       this.onOpenConfirm();
@@ -409,24 +479,32 @@ export class ReviewController {
     document.addEventListener('keydown', (e) => {
       if (!$('#screen-review').classList.contains('active')) return;
       if (!$('#tab-deidentify').classList.contains('active')) return;
-      const tag = document.activeElement?.tagName;
+      const activeEl = document.activeElement;
+      const tag = activeEl?.tagName;
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        this.#undo();
+        return;
+      }
       if (e.ctrlKey || e.altKey || e.metaKey) return;
 
       const key = e.key.toLowerCase();
-      // 미리보기에 포커스가 있으면 방향키는 그 패널의 스크롤이어야 한다.
-      if (document.activeElement === $('#preview') && PREVIEW_SCROLL_KEYS.has(key)) return;
+      // 포커스된 버튼의 Enter·Space는 그 버튼의 동작이어야 한다
+      if (tag === 'BUTTON' && (key === 'enter' || key === ' ')) return;
+      // 문서 본문에 포커스가 있으면 방향키는 그 패널의 스크롤이고 Enter는 강조 선택이다
+      const inPreview = Boolean(activeEl?.closest?.('#preview'));
+      if (inPreview && (PREVIEW_SCROLL_KEYS.has(key) || key === 'enter')) return;
 
-      if (key === 'j' || key === 'arrowdown') {
+      if (key === 'j' || key === 'arrowdown' || key === 'k' || key === 'arrowup') {
         e.preventDefault();
-        const id = this.listView.moveCursor(1, this.session.candidates);
-        if (id) this.highlighter.focus(id);
-        return;
-      }
-      if (key === 'k' || key === 'arrowup') {
-        e.preventDefault();
-        const id = this.listView.moveCursor(-1, this.session.candidates);
-        if (id) this.highlighter.focus(id);
+        const delta = key === 'j' || key === 'arrowdown' ? 1 : -1;
+        const id = this.listView.moveCursor(delta, this.session.candidates);
+        if (id) {
+          this.highlighter.focus(id);
+          this.#renderInspector();
+        }
         return;
       }
 
@@ -435,15 +513,12 @@ export class ReviewController {
 
       if (key === 'i' || key === 'x') {
         e.preventDefault();
-        this.#pushHistory();
-        setReviewState(current, key === 'i' ? REVIEW_STATES.PROCESS : REVIEW_STATES.EXCLUDE);
-        this.sync();
+        this.#decide(current, key === 'i' ? REVIEW_STATES.PROCESS : REVIEW_STATES.EXCLUDE, { advance: true });
         return;
       }
       if (key === 'enter') {
         e.preventDefault();
-        this.listView.toggleExpanded(current.id);
-        this.sync();
+        $('#cand-inspector .c-type')?.focus();
         return;
       }
       if (['1', '2', '3', '4'].includes(key)) {

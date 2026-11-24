@@ -16,8 +16,8 @@ describe('미리보기 선택 위치 변환', () => {
   });
 
   it('CSV fixture의 비후보 구간 선택이 기존 후보와 겹치지 않는다', () => {
-    const documentsUrl = new URL('./fixtures/documents/', import.meta.url);
-    const fixtureName = readdirSync(documentsUrl).find((name) => name.startsWith('04_'));
+    const documentsUrl = new URL('./documents/', import.meta.url);
+    const fixtureName = readdirSync(documentsUrl).find((name) => name.startsWith('02_'));
     const bytes = readFileSync(new URL(fixtureName, documentsUrl));
     const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     const parsed = parseCsv(buffer);

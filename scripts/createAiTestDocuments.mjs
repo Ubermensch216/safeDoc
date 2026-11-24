@@ -560,15 +560,28 @@ const hwpxSection = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 ${hwpxBody.join('\n')}
 </hs:sec>`;
 
+// 한글은 글자 모양의 장평(ratio)·상대 크기(relSz)가 없으면 0%로 해석해 글자를 한 점에 겹쳐 그린다.
+// 언어별 글꼴과 함께 모든 글자 모양 속성을 명시해야 정상적으로 표시된다.
+const HWPX_LANGS = ['HANGUL', 'LATIN', 'HANJA', 'JAPANESE', 'OTHER', 'SYMBOL', 'USER'];
+const hwpxLangAttrs = (value) => HWPX_LANGS.map((lang) => `${lang.toLowerCase()}="${value}"`).join(' ');
+const hwpxFontfaces = HWPX_LANGS
+  .map((lang) => `<hh:fontface lang="${lang}" fontCnt="1"><hh:font id="0" face="맑은 고딕" type="TTF" isEmbedded="0"/></hh:fontface>`)
+  .join('');
+const hwpxCharPr = (id, height, { bold = false } = {}) => `<hh:charPr id="${id}" height="${height}" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="2">`
+  + `<hh:fontRef ${hwpxLangAttrs(0)}/><hh:ratio ${hwpxLangAttrs(100)}/><hh:spacing ${hwpxLangAttrs(0)}/>`
+  + `<hh:relSz ${hwpxLangAttrs(100)}/><hh:offset ${hwpxLangAttrs(0)}/>${bold ? '<hh:bold/>' : ''}`
+  + '<hh:underline type="NONE" shape="SOLID" color="#000000"/><hh:strikeout shape="NONE" color="#000000"/>'
+  + '<hh:outline type="NONE"/><hh:shadow type="NONE" color="#B2B2B2" offsetX="10" offsetY="10"/></hh:charPr>';
+
 const hwpxHeader = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <hh:head ${HWPX_NS} version="1.4" secCnt="1">
   <hh:beginNum page="1" footnote="1" endnote="1" pic="1" tbl="1" equation="1"/>
   <hh:refList>
-    <hh:fontfaces itemCnt="1"><hh:fontface lang="HANGUL" fontCnt="1"><hh:font id="0" face="맑은 고딕" type="TTF" isEmbedded="0"/></hh:fontface></hh:fontfaces>
-    <hh:borderFills itemCnt="1"><hh:borderFill id="1" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0"><hh:slash type="NONE" Crooked="0" isCounter="0"/><hh:backSlash type="NONE" Crooked="0" isCounter="0"/><hh:leftBorder type="SOLID" width="0.12 mm" color="#999999"/><hh:rightBorder type="SOLID" width="0.12 mm" color="#999999"/><hh:topBorder type="SOLID" width="0.12 mm" color="#999999"/><hh:bottomBorder type="SOLID" width="0.12 mm" color="#999999"/></hh:borderFill></hh:borderFills>
+    <hh:fontfaces itemCnt="${HWPX_LANGS.length}">${hwpxFontfaces}</hh:fontfaces>
+    <hh:borderFills itemCnt="2"><hh:borderFill id="1" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0"><hh:slash type="NONE" Crooked="0" isCounter="0"/><hh:backSlash type="NONE" Crooked="0" isCounter="0"/><hh:leftBorder type="SOLID" width="0.12 mm" color="#999999"/><hh:rightBorder type="SOLID" width="0.12 mm" color="#999999"/><hh:topBorder type="SOLID" width="0.12 mm" color="#999999"/><hh:bottomBorder type="SOLID" width="0.12 mm" color="#999999"/></hh:borderFill><hh:borderFill id="2" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0"><hh:slash type="NONE" Crooked="0" isCounter="0"/><hh:backSlash type="NONE" Crooked="0" isCounter="0"/><hh:leftBorder type="NONE" width="0.1 mm" color="#000000"/><hh:rightBorder type="NONE" width="0.1 mm" color="#000000"/><hh:topBorder type="NONE" width="0.1 mm" color="#000000"/><hh:bottomBorder type="NONE" width="0.1 mm" color="#000000"/></hh:borderFill></hh:borderFills>
     <hh:charProperties itemCnt="2">
-      <hh:charPr id="0" height="1000" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="1"><hh:fontRef hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/></hh:charPr>
-      <hh:charPr id="1" height="1100" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="1"><hh:fontRef hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/><hh:bold/></hh:charPr>
+      ${hwpxCharPr(0, 1000)}
+      ${hwpxCharPr(1, 1100, { bold: true })}
     </hh:charProperties>
     <hh:paraProperties itemCnt="1"><hh:paraPr id="0" tabPrIDRef="0" condense="0" fontLineHeight="0" snapToGrid="1" suppressLineNumbers="0" checked="0"><hh:align horizontal="JUSTIFY" vertical="BASELINE"/><hh:lineSpacing type="PERCENT" value="160" unit="HWPUNIT"/></hh:paraPr></hh:paraProperties>
     <hh:styles itemCnt="1"><hh:style id="0" type="PARA" name="바탕글" engName="Normal" paraPrIDRef="0" charPrIDRef="0" nextStyleIDRef="0" langID="1042" lockForm="0"/></hh:styles>

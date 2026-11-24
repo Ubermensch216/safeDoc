@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { parsePdf, buildPdfResult, sliceGeometry } from '../src/parsers/pdf.js';
@@ -78,5 +79,15 @@ describe('PDF 처리', () => {
     const parsed = await parsePdf(await makeTextPdf(), { render: false });
 
     await expect(restoreDocument(parsed, { mappings: [] })).rejects.toThrow(/PDF는 파일 복원을 지원하지 않습니다/);
+  });
+
+  it('test/documents의 PDF 시험 문서는 3페이지 이상이며 표와 본문 텍스트를 추출한다', async () => {
+    const bytes = readFileSync(new URL('./documents/06_개인정보_처리현황_보고서.pdf', import.meta.url));
+    const parsed = await parsePdf(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), { render: false });
+
+    expect(parsed.meta.pageCount).toBeGreaterThanOrEqual(3);
+    expect(parsed.text).toContain('김서연');
+    expect(parsed.text).toContain('응우옌 티 흐엉');
+    expect(parsed.text).toContain('900101-1234567');
   });
 });

@@ -2,7 +2,7 @@
 
 import {
   KOREAN_SURNAMES, KOREAN_SURNAMES_2CHAR, NAME_FIELD_KEYWORDS, COLON_NAME_LABELS,
-  NON_NAME_FIELD_LABELS, NAME_TITLES, NAME_STOPWORDS,
+  NON_NAME_FIELD_LABELS, NAME_TITLES, NAME_STOPWORDS, COMMON_WORDS_UNLESS_LABELED,
   FIELD_KEYWORDS_BY_TYPE, BANK_NAMES, SIDO_NAMES,
 } from '../dictionaries.js';
 import { makeCandidate } from './helpers.js';
@@ -255,6 +255,30 @@ function isNearStructuredPii(text, start, end, otherPiiRanges) {
   return { near, sameLine: false };
 }
 
+// 행정 문서의 명사형 종결("예정임", "보완함", "완료됨", "정산할")
+const PROSE_ENDING = /(할|함|됨|임)$/;
+const CELL_DELIMITER = /[|,;:/·•\t()[\]<>]/;
+const ADJACENT_PII_GAP = /^[ \t|,;:/·()[\]]{0,4}$/;
+
+// 표·명단처럼 값이 구분자로 떨어져 있거나 정형 개인정보 바로 옆에 있는 위치인지 확인한다.
+// 문장 속 일반 단어는 같은 줄에 전화번호가 있다는 이유만으로 성명이 되면 안 된다.
+function isTabularPosition(text, start, end, otherPiiRanges) {
+  const adjacentToPii = otherPiiRanges.some((r) => {
+    if (r.start >= end) return r.start - end <= 4 && ADJACENT_PII_GAP.test(text.slice(end, r.start));
+    if (r.end <= start) return start - r.end <= 4 && ADJACENT_PII_GAP.test(text.slice(r.end, start));
+    return false;
+  });
+  if (adjacentToPii) return true;
+
+  const lineStart = text.lastIndexOf('\n', start - 1) + 1;
+  const left = text.slice(lineStart, start).trimEnd();
+  const lineBreak = text.indexOf('\n', end);
+  const right = text.slice(end, lineBreak < 0 ? text.length : lineBreak).trimStart();
+  const leftBounded = left.length === 0 || CELL_DELIMITER.test(left[left.length - 1]);
+  const rightBounded = right.length === 0 || CELL_DELIMITER.test(right[0]);
+  return leftBounded && rightBounded;
+}
+
 // 다중 어절 외국인 성명 후보 검증 ("응우옌 티 흐엉", "제임스 카터", "리 웨이", "사토 유키")
 function cleanForeignNameTokens(rawPhrase) {
   const tokens = rawPhrase.trim().split(/[ \t]+/).filter(Boolean);
@@ -307,6 +331,7 @@ function detectFieldNames(text, addVariants) {
       : nameVariants(raw);
     const base = variants[variants.length - 1];
     if (isNonNameWord(base) || isFollowedByOrgContext(text, valueStart + base.length)) continue;
+    if (!hasColon && COMMON_WORDS_UNLESS_LABELED.has(base)) continue;
     // 콜론 없이 공백으로만 이어진 경우("보호자 동의", "수신자 목록")에는 성씨 구조가 맞아야 성명으로 인정
     // 명시적 성명 필드명 뒤의 4글자 성명("동행인 왕리메이는")은 어미 검증 통과 시 허용한다.
     if (!hasColon && !startsWithValidSurname(base, !VERB_OR_MODIFIER_SUFFIX.test(raw))) continue;
@@ -366,6 +391,7 @@ function detectFieldParticleNames(text, addVariants) {
     const base = variants[variants.length - 1];
     if (base.length < 2 || base.length > 4) continue;
     if (!startsWithValidSurname(base, false) || isNonNameWord(base)) continue;
+    if (COMMON_WORDS_UNLESS_LABELED.has(base)) continue;
     const start = m.index + m[0].length - raw.length;
     addVariants(start, variants, 0.65, 'CONTEXT', base);
   }
@@ -464,6 +490,7 @@ function detectContextualNames(text, otherPiiRanges, confirmedNames, addVariants
     const variants = nameVariants(raw);
     const base = variants[variants.length - 1];
     if (base.length < 2 || base.length > 4 || isNonNameWord(base)) continue;
+    if (COMMON_WORDS_UNLESS_LABELED.has(base)) continue;
     // 뒤가 한글이나 숫자이면 복합어·직급·코드의 일부이므로 제외 ("공업6급"의 "공업" 등)
     if (m.index + raw.length < text.length && /[가-힣0-9]/.test(text[m.index + raw.length])) continue;
 
@@ -483,6 +510,7 @@ function detectContextualNames(text, otherPiiRanges, confirmedNames, addVariants
   const pendingPropagation = [];
   for (const c of candidates) {
     let score = c.variants[0].length === 2 ? 0.15 : 0.25;
+    let hasPersonEvidence = c.hasTitle;
 
     // (a) 직위·호칭 결합 ("김서연 주무관", "박서준 씨", "신동현 님")
     if (c.hasTitle) score += 0.35;
@@ -490,6 +518,7 @@ function detectContextualNames(text, otherPiiRanges, confirmedNames, addVariants
     // (b) 사람 전용 격조사·동반 표현 또는 (c) 주격/보조사 + 인명 행위 서술어
     if (PERSON_PARTICLE_AFTER.test(c.after)) {
       score += 0.25;
+      hasPersonEvidence = true;
     } else if (/^(은|는|이|가|의)(?![가-힣])/.test(c.after)) {
       const lineEnd = text.indexOf('\n', c.baseEnd);
       const clauseAfter = text.slice(
@@ -500,13 +529,21 @@ function detectContextualNames(text, otherPiiRanges, confirmedNames, addVariants
       const clauseBefore = text.slice(lineStart, c.start);
       if (PERSON_ACTION_CONTEXT.test(clauseAfter) || PERSON_ACTION_CONTEXT.test(clauseBefore)) {
         score += 0.25;
+        hasPersonEvidence = true;
       }
     }
 
     // (d) 같은 줄(또는 인접 줄) 정형 개인정보와의 인접성
-    const piiProximity = isNearStructuredPii(text, c.start, c.baseEnd, otherPiiRanges);
-    if (piiProximity.sameLine) score += 0.25;
-    else if (piiProximity.near) score += 0.15;
+    // 두 글자 단어와 명사형 종결 단어는 인접성만으로는 근거가 약해 표·명단 위치일 때만 인정한다
+    const weakWord = c.base.length === 2 || PROSE_ENDING.test(c.base);
+    // "이서은"은 조사를 뗀 "이서"가 기준값이 되므로 위치는 원래 단어의 끝으로 판단한다
+    const proximityCounts = hasPersonEvidence || !weakWord
+      || isTabularPosition(text, c.start, c.start + c.variants[0].length, otherPiiRanges);
+    if (proximityCounts) {
+      const piiProximity = isNearStructuredPii(text, c.start, c.baseEnd, otherPiiRanges);
+      if (piiProximity.sameLine) score += 0.25;
+      else if (piiProximity.near) score += 0.15;
+    }
 
     if (score >= 0.4) {
       if ((wordCount.get(c.base) || 0) >= 2) score += 0.05;

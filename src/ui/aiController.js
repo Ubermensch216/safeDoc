@@ -34,6 +34,8 @@ export class AiController {
     if (badgeText) badgeText.textContent = text;
     const settingsState = $('#settings-ai-state');
     if (settingsState) settingsState.textContent = text;
+    const summary = $('.ai-connection-summary');
+    if (summary) summary.dataset.state = state;
   }
 
   async refreshAvailability() {
@@ -187,6 +189,6 @@ export class AiController {
     const pct = total > 0 ? (done / total) * 100 : 0;
     $('#ai-progress').style.width = `${pct}%`;
     $('#ai-progressbar').setAttribute('aria-valuenow', String(Math.round(pct)));
-    $('#ai-status-text').textContent = `AI 검사 ${done}/${total} · ${added}건 추가 발견`;
+    $('#ai-status-text').textContent = `추가 탐지 ${done}/${total} · ${added}건 발견`;
   }
 }

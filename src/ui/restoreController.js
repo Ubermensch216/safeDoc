@@ -12,7 +12,18 @@ export function bindRestoreEvents() {
   const validation = $('#restore-validation');
   let validatedTable = null;
 
+  const showFileName = (input, labelSelector) => {
+    const file = input.files[0];
+    const label = $(labelSelector);
+    label.dataset.placeholder ??= label.textContent;
+    label.textContent = file ? file.name : label.dataset.placeholder;
+    input.closest('.file-field').classList.toggle('has-file', Boolean(file));
+  };
+
   const validatePair = async () => {
+    showFileName(docInput, '#restore-doc-name');
+    showFileName(mapInput, '#restore-map-name');
+    $('#restore-result').hidden = true;
     btn.disabled = true;
     validatedTable = null;
     if (!(docInput.files.length > 0 && mapInput.files.length > 0)) {

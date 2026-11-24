@@ -46,8 +46,21 @@ export function renderDocMeta(file, parsed) {
 
 // 처리결과 요약 (FR-606)
 export function renderSummaryHtml(summary) {
-  const stat = (v, k, cls = '') => `<div class="stat ${cls}"><span class="v">${v}</span><span class="k">${k}</span></div>`;
+  const stat = (v, k, cls = '') => `<div class="stat ${cls}"><span class="k">${k}</span><span class="v">${v}</span></div>`;
 
+  return `
+<p class="result-file" title="${escapeHtml(summary.resultFileName)}">결과 파일 <strong>${escapeHtml(summary.resultFileName)}</strong></p>
+<div class="stat-row">
+  ${stat(summary.detectedCount, '탐지')}
+  ${stat(summary.processedCount, '처리', 'accent')}
+  ${stat(summary.excludedCount, '제외', summary.excludedCount > 0 ? 'warn' : '')}
+  ${stat(summary.manuallyAddedCount, '수동 추가')}
+  ${stat(summary.aiAddedCount || 0, 'AI 발견')}
+</div>`;
+}
+
+// 유형·처리방식별 내역과 AI 사용 기록
+export function renderSummaryDetailHtml(summary) {
   const typeRows = Object.entries(summary.typeCounts)
     .map(([t, n]) => `<tr><td>${escapeHtml(PII_TYPES[t]?.label || t)}</td><td>${n}건</td></tr>`)
     .join('');
@@ -68,20 +81,11 @@ export function renderSummaryHtml(summary) {
   }
 
   return `
-<p>원본 <strong>${escapeHtml(summary.sourceFileName)}</strong> → 결과 <strong>${escapeHtml(summary.resultFileName)}</strong></p>
-<div class="stat-row">
-  ${stat(summary.detectedCount, '탐지')}
-  ${stat(summary.processedCount, '처리', 'accent')}
-  ${stat(summary.excludedCount, '제외', summary.excludedCount > 0 ? 'warn' : '')}
-  ${stat(summary.manuallyAddedCount, '수동 추가')}
-  ${stat(summary.aiAddedCount || 0, 'AI 발견', 'accent')}
-</div>
-<div class="result-tables">
-  <table><thead><tr><th>개인정보 유형</th><th>처리 건수</th></tr></thead>
-    <tbody>${typeRows || '<tr><td colspan="2">없음</td></tr>'}</tbody></table>
-  <table><thead><tr><th>처리방식</th><th>건수</th></tr></thead>
-    <tbody>${actionRows || '<tr><td colspan="2">없음</td></tr>'}</tbody></table>
-</div>
+<table><thead><tr><th>개인정보 유형</th><th>건수</th></tr></thead>
+  <tbody>${typeRows || '<tr><td colspan="2">없음</td></tr>'}</tbody></table>
+<table><thead><tr><th>처리방식</th><th>건수</th></tr></thead>
+  <tbody>${actionRows || '<tr><td colspan="2">없음</td></tr>'}</tbody></table>
+<p class="muted">원본: ${escapeHtml(summary.sourceFileName)}</p>
 ${aiHtml}
 <p class="muted">처리 일시: ${new Date(summary.processedAt).toLocaleString('ko-KR')}</p>`;
 }

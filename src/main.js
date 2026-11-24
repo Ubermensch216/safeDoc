@@ -15,7 +15,7 @@ import { buildSummary, summaryToBlob } from './core/summary.js';
 import { AppError } from './core/errors.js';
 import { $, $$, toast, showError, showScreen, escapeHtml } from './ui/dom.js';
 import { buildPreviewHtml } from './ui/highlight.js';
-import { renderAfterHtml, renderSummaryHtml, renderDocMeta } from './ui/render.js';
+import { renderAfterHtml, renderSummaryHtml, renderSummaryDetailHtml, renderDocMeta } from './ui/render.js';
 import { loadStoredPolicies } from './ui/storage.js';
 import { AiController } from './ui/aiController.js';
 import { ReviewController } from './ui/reviewController.js';
@@ -95,9 +95,11 @@ function populateSelects() {
   $('#add-type').value = 'CUSTOM';
 
   $('#type-filter').innerHTML = `<option value="">전체 유형</option>${options}`;
-  $('#bulk-action').innerHTML = Object.entries(ACTION_LABELS)
-    .map(([code, label]) => `<option value="${code}">${escapeHtml(label)}</option>`)
-    .join('');
+  // 같은 값을 다시 골라도 동작하도록 선택 후 항상 안내 문구로 되돌린다
+  $('#bulk-action').innerHTML = '<option value="">처리방식 변경</option>'
+    + Object.entries(ACTION_LABELS)
+      .map(([code, label]) => `<option value="${code}">${escapeHtml(label)}</option>`)
+      .join('');
 }
 
 // ---------- 탭 전환 ----------
@@ -111,17 +113,6 @@ function activateTab(btn, { focus = false } = {}) {
   });
   $$('.tab-panel').forEach((p) => p.classList.remove('active'));
   $(`#tab-${btn.dataset.tab}`).classList.add('active');
-
-  const titles = {
-    deidentify: ['비식별 작업', session.parsed ? '개인정보 검토' : '새 비식별 작업'],
-    restore: ['도구', '원본 복원'],
-    settings: ['관리', '설정'],
-  };
-  const [eyebrow, title] = titles[btn.dataset.tab];
-  const pageEyebrow = $('#page-eyebrow');
-  if (pageEyebrow) pageEyebrow.textContent = eyebrow;
-  const pageTitle = $('#page-title');
-  if (pageTitle) pageTitle.textContent = title;
   if (focus) btn.focus();
 }
 
@@ -231,6 +222,7 @@ async function runAnalysis() {
     review.renderPreviewNow(session.parsed.text, session.candidates);
     review.sync({ resort: true });
     showScreen('screen-review');
+    review.selectFirst();
 
     // 규칙 결과를 먼저 보여준 뒤 AI 탐지를 백그라운드로 시작한다 (계획 C-7)
     ai.startPass();
@@ -250,12 +242,20 @@ function renderConfirmScreen() {
   $('#confirm-pending-count').textContent = counts.pending.toLocaleString();
 
   const actionCounts = {};
+  const typeCounts = {};
   for (const candidate of session.candidates.filter((c) => c.reviewState === REVIEW_STATES.PROCESS)) {
     const action = candidate.action || session.typePolicies[candidate.type] || 'REPLACE';
     actionCounts[action] = (actionCounts[action] || 0) + 1;
+    typeCounts[candidate.type] = (typeCounts[candidate.type] || 0) + 1;
   }
-  $('#confirm-action-counts').innerHTML = Object.entries(ACTION_LABELS).map(([action, label]) =>
-    `<div class="action-count-row"><span>${escapeHtml(label)}</span><strong>${(actionCounts[action] || 0).toLocaleString()}개</strong></div>`).join('');
+  const countRow = (label, count) =>
+    `<div class="action-count-row${count ? '' : ' is-zero'}"><span>${escapeHtml(label)}</span><strong>${count.toLocaleString()}건</strong></div>`;
+  $('#confirm-action-counts').innerHTML = Object.entries(ACTION_LABELS)
+    .map(([action, label]) => countRow(label, actionCounts[action] || 0)).join('');
+  $('#confirm-type-counts').innerHTML = Object.entries(PII_TYPES)
+    .filter(([code]) => typeCounts[code])
+    .map(([code, def]) => countRow(def.label, typeCounts[code])).join('')
+    || '<p class="muted">처리 대상이 없습니다.</p>';
 
   const aiWarning = $('#confirm-ai-warning');
   const aiRunning = ai.isRunning();
@@ -339,6 +339,7 @@ async function executeDeidentify() {
     const beforeHtml = buildPreviewHtml(session.parsed.text, session.candidates.filter((c) => c.selected));
     const afterHtml = renderAfterHtml(afterText, applied);
     $('#result-summary').innerHTML = renderSummaryHtml(summary);
+    $('#result-detail').innerHTML = renderSummaryDetailHtml(summary);
     $('#compare-split-before').innerHTML = beforeHtml;
     $('#compare-split-after').innerHTML = afterHtml;
     $('#compare-changes').innerHTML = renderChangeList(applied);
@@ -381,8 +382,10 @@ function bindConfirmAndResultEvents() {
   // 변경 항목/나란히 비교 토글
   $$('.seg-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
-      $$('.seg-btn').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
+      $$('.seg-btn').forEach((b) => {
+        b.classList.toggle('active', b === btn);
+        b.setAttribute('aria-pressed', String(b === btn));
+      });
       $('#compare-changes').hidden = btn.dataset.compare !== 'changes';
       $('#compare-side-by-side').hidden = btn.dataset.compare !== 'side-by-side';
     });
@@ -407,6 +410,7 @@ function resetWorkUi() {
   $('#compare-split-before').innerHTML = '';
   $('#compare-split-after').innerHTML = '';
   $('#result-summary').innerHTML = '';
+  $('#result-detail').innerHTML = '';
   $('#doc-meta').innerHTML = '';
   $('#final-confirm').checked = false;
   $('#btn-execute').disabled = true;

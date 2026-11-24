@@ -267,12 +267,43 @@ function extractXlsxTables(files, entries, fullText) {
   return tables;
 }
 
+// 1×1 흰색 PNG — HWPX 미리보기 이미지 교체용
+const BLANK_PNG = Uint8Array.from(
+  atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAABHNCSVQICAgIfAhkiAAAAAFzUkdCAK7OHOkAAAANSURBVAiZY/j///9/AAn7A/0I0egeAAAAAElFTkSuQmCC'),
+  (ch) => ch.charCodeAt(0),
+);
+
+// 한글은 저장할 때 본문 원문과 첫 쪽 그림을 Preview/에 따로 넣는다.
+// 본문만 치환하면 여기에 개인정보가 그대로 남으므로 내용을 비운다.
+// container.xml이 참조하는 항목이라 파일 자체는 유지한다.
+function sanitizeHwpxPreview(entries) {
+  for (const name of Object.keys(entries)) {
+    if (!/^Preview\//i.test(name)) continue;
+    entries[name] = /\.txt$/i.test(name) ? new Uint8Array(0) : BLANK_PNG;
+  }
+}
+
+// 한글 문서 속성의 작성자·마지막 저장자는 본문 탐지 대상이 아니므로 결과 파일에서 비운다.
+// 값이 없는 self-closing 항목은 건드리지 않도록 닫는 태그가 있는 항목만 치환한다.
+const HWPX_AUTHOR_META =
+  /(<(?:\w+:)?meta\b(?=[^>]*\bname="(?:creator|lastsaveby)")[^>]*)(?<!\/)>[\s\S]*?<\/(?:\w+:)?meta>/gi;
+
+function sanitizeHwpxAuthorInfo(entries) {
+  const path = 'Contents/content.hpf';
+  if (!entries[path]) return;
+  entries[path] = strToU8(strFromU8(entries[path]).replace(HWPX_AUTHOR_META, '$1/>'));
+}
+
 // 적용 내역을 XML에 반영하여 결과 ZIP 생성
 export function buildZipResult(parsed, applied) {
   applyToSegments(parsed.files, applied);
   const newEntries = {};
   for (const [name, data] of Object.entries(parsed.entries)) {
     newEntries[name] = data;
+  }
+  if (parsed.format === 'hwpx') {
+    sanitizeHwpxPreview(newEntries);
+    sanitizeHwpxAuthorInfo(newEntries);
   }
   for (const file of parsed.files) {
     const newXml = spliceXml(file.xml, file.segments);

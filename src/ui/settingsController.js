@@ -2,6 +2,7 @@
 
 import { PII_TYPES, ACTION_LABELS } from '../detect/types.js';
 import { checkAvailability, DEFAULT_ENDPOINT, DEFAULT_MODEL } from '../ai/ollamaClient.js';
+import { previewReplacement } from '../core/deidentify.js';
 import { $, $$, toast, escapeHtml } from './dom.js';
 import {
   defaultAiSettings,
@@ -10,6 +11,30 @@ import {
   saveStoredAiSettings,
   clearStoredSettings,
 } from './storage.js';
+
+// 처리방식의 결과를 미리 보여 주기 위한 가상 값
+const POLICY_SAMPLES = {
+  PERSON_NAME: '홍길동',
+  RRN: '900101-1234567',
+  FOREIGNER_NO: '900101-5234567',
+  PHONE_MOBILE: '010-1234-5678',
+  PHONE_LANDLINE: '02-123-4567',
+  EMAIL: 'hong@example.com',
+  ADDRESS: '서울시 중구 세종대로 110',
+  ACCOUNT_NO: '123-456-789012',
+  CARD_NO: '1234-5678-9012-3456',
+  PASSPORT_NO: 'M12345678',
+  BUSINESS_NO: '123-45-67890',
+  VEHICLE_NO: '12가 3456',
+  IP_ADDRESS: '192.168.0.1',
+  BIRTH_DATE: '1990-01-01',
+  CUSTOM: 'EMP-000123',
+};
+
+function policyExampleHtml(code, action) {
+  const sample = POLICY_SAMPLES[code] || '예시 값';
+  return `${escapeHtml(sample)} → <b>${escapeHtml(previewReplacement(code, action, sample))}</b>`;
+}
 
 export function createSettingsController({ session, onPoliciesChanged, onAiSettingsChanged }) {
   let aiSettings = loadStoredAiSettings();
@@ -24,11 +49,12 @@ export function createSettingsController({ session, onPoliciesChanged, onAiSetti
   function renderPolicyList() {
     $('#policy-list').innerHTML = Object.entries(PII_TYPES).map(([code, def]) => `
 <div class="policy-item">
-  <span>${escapeHtml(def.label)}</span>
-  <select data-type="${code}">
+  <span class="policy-name">${escapeHtml(def.label)}</span>
+  <select data-type="${code}" aria-label="${escapeHtml(def.label)} 기본 처리방식">
     ${Object.entries(ACTION_LABELS).map(([a, label]) =>
       `<option value="${a}"${session.typePolicies[code] === a ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('')}
   </select>
+  <span class="policy-example" data-example="${code}">${policyExampleHtml(code, session.typePolicies[code])}</span>
 </div>`).join('');
   }
 
@@ -42,7 +68,11 @@ export function createSettingsController({ session, onPoliciesChanged, onAiSetti
   function bindNavigation() {
     $$('.settings-nav-btn').forEach((button) => {
       button.addEventListener('click', () => {
-        $$('.settings-nav-btn').forEach((item) => item.classList.toggle('active', item === button));
+        $$('.settings-nav-btn').forEach((item) => {
+          item.classList.toggle('active', item === button);
+          if (item === button) item.setAttribute('aria-current', 'true');
+          else item.removeAttribute('aria-current');
+        });
         $$('.settings-panel').forEach((panel) => panel.classList.toggle('active', panel.dataset.settingsPanel === button.dataset.settings));
         const activePanel = $(`[data-settings-panel="${button.dataset.settings}"]`);
         const heading = activePanel?.querySelector('h3');
@@ -63,6 +93,7 @@ export function createSettingsController({ session, onPoliciesChanged, onAiSetti
       const type = e.target.dataset.type;
       if (!type) return;
       session.typePolicies[type] = e.target.value;
+      $(`[data-example="${type}"]`).innerHTML = policyExampleHtml(type, e.target.value);
       saveStoredPolicies(session.typePolicies);
       onPoliciesChanged();
     });
@@ -129,6 +160,7 @@ export function createSettingsController({ session, onPoliciesChanged, onAiSetti
 
     // 설정 초기화 (FR-804)
     $('#btn-reset-settings').addEventListener('click', () => {
+      if (!window.confirm('처리 정책, AI 연결 설정, 사용자 규칙을 모두 기본값으로 되돌립니다.\n계속하시겠습니까?')) return;
       clearStoredSettings();
       session.typePolicies = session.defaultPolicies();
       aiSettings = defaultAiSettings();

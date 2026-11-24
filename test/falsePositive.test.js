@@ -46,6 +46,32 @@ describe('계좌번호 오탐 (ANALYSIS.md 2.3)', () => {
   });
 });
 
+describe('공백 구분 계좌번호', () => {
+  it('계좌 필드명·은행명이 있으면 공백으로 나뉜 계좌번호를 찾는다', () => {
+    const found = byType('공백 구분 계좌번호: 110 123 456789 (신한은행), 1002 345 678901 (우리은행)', 'ACCOUNT_NO');
+    expect(found).toEqual(['110 123 456789', '1002 345 678901']);
+    expect(byType('환불계좌 110 123 456789', 'ACCOUNT_NO')).toEqual(['110 123 456789']);
+    expect(byType('110 123 456789 국민은행', 'ACCOUNT_NO')).toEqual(['110 123 456789']);
+    expect(byType('계좌번호 110 123 456789', 'ACCOUNT_NO')).toEqual(['110 123 456789']);
+  });
+
+  it('뒤에 이어지는 숫자(연도 등)를 계좌번호로 삼키지 않는다', () => {
+    expect(byType('계좌번호: 110 123 456789 2026 접수', 'ACCOUNT_NO')).toEqual(['110 123 456789']);
+  });
+
+  it('계좌 문맥이 없는 숫자 나열은 후보가 아니다', () => {
+    expect(byType('점검 결과 110 123 456789 건', 'ACCOUNT_NO')).toHaveLength(0);
+    expect(byType('2026 04 17 1030 12', 'ACCOUNT_NO')).toHaveLength(0);
+    expect(byType('인원수 1 924 3 42 18', 'ACCOUNT_NO')).toHaveLength(0);
+  });
+
+  it('번호류 라벨·전화번호·카드번호는 계좌번호가 아니다', () => {
+    expect(byType('주문번호 110 123 456789', 'ACCOUNT_NO')).toHaveLength(0);
+    expect(byType('계좌 문의 010 1234 5678', 'ACCOUNT_NO')).toHaveLength(0);
+    expect(byType('국민은행 카드 1234 5678 9012 3456', 'ACCOUNT_NO')).toHaveLength(0);
+  });
+});
+
 describe('사업자등록번호 체크섬 정책 (ANALYSIS.md 2.2)', () => {
   it('검증번호가 틀려도 필드명이 있으면 낮은 신뢰도 후보로 유지된다', () => {
     // 이전에는 통째로 버려져 계좌번호로 오분류되거나 완전 누락됐다.
@@ -198,5 +224,54 @@ describe('기관명·복합어 성명 오탐 (ANALYSIS.md 2.5)', () => {
     expect(byType('3 부산근현대역사관 행정6급 하은지 010-1234-1025', 'PERSON_NAME')).toContain('하은지');
     expect(byType('성명: 김은지, 연락처 010-5555-6666', 'PERSON_NAME')).toContain('김은지');
     expect(byType('담당자 정은지 010-7777-8888', 'PERSON_NAME')).toContain('정은지');
+  });
+});
+
+describe('문장 속 일반 단어 성명 오탐', () => {
+  it('같은 줄에 정형 개인정보가 있어도 문장 속 일반 단어는 성명이 아니다', () => {
+    const 문서 = [
+      '내용: 상수도 요금 감면 소급 적용 요청. 신한은행 110-456-789012 계좌로 차액을 정산할 예정임.',
+      '최종 검증 결과는 010-2233-4455 로 회신하며 문장 속에 포함된 항목은 예외 없이 확인한다.',
+      '지방세 납세증명서 발급 여부를 010-3311-2244 로 안내하고 위임 여부를 점검한다.',
+    ].join('\n');
+    const names = byType(문서, 'PERSON_NAME');
+    for (const word of ['감면', '소급', '차액', '정산할', '예정임', '최종', '문장', '예외', '지방세', '여부', '위임']) {
+      expect(names).not.toContain(word);
+    }
+  });
+
+  it('명사형 종결 단어는 인접성만으로 성명이 되지 않는다', () => {
+    expect(byType('서류 보완함 연락처 010-1234-5678 확인', 'PERSON_NAME')).not.toContain('보완함');
+    expect(byType('처리 완료됨 연락처 010-1234-5678 확인', 'PERSON_NAME')).not.toContain('완료됨');
+  });
+
+  it('제목의 "담당자 배정"은 성명이 아니다', () => {
+    expect(byType('4. 후속 조치 계획 및 담당자 배정', 'PERSON_NAME')).not.toContain('배정');
+  });
+
+  it('명시적 라벨 뒤의 값은 일반 단어와 같아도 성명으로 유지한다 (재현율 유지)', () => {
+    expect(byType('성명: 배정', 'PERSON_NAME')).toContain('배정');
+    expect(byType('신청인: 최종', 'PERSON_NAME')).toContain('최종');
+  });
+
+  it('표·명단 위치의 두 글자 성명은 계속 탐지한다 (재현율 유지)', () => {
+    expect(byType('이든 950101-1998877', 'PERSON_NAME')).toContain('이든');
+    expect(byType('010-9911-2233 박솔', 'PERSON_NAME')).toContain('박솔');
+    expect(byType('| 한결 | 010-3456-7890 |', 'PERSON_NAME')).toContain('한결');
+    expect(byType('1. 김일, 010-1234-0582', 'PERSON_NAME')).toContain('김일');
+  });
+
+  it('끝 글자가 조사와 같은 세 글자 성명도 표 위치에서 온전히 탐지한다 (재현율 유지)', () => {
+    for (const name of ['이서은', '박하은', '정예은']) {
+      expect(byType(`${name} 010-1234-5678`, 'PERSON_NAME')).toContain(name);
+    }
+  });
+
+  it('호칭·행위 문맥의 두 글자 성명과 재출현 성명은 계속 탐지한다 (재현율 유지)', () => {
+    expect(byType('김일 주무관 연락처 010-1234-0582', 'PERSON_NAME')).toContain('김일');
+    expect(byType('서류는 한결이 제출하였고 연락처는 010-3456-7890 이다', 'PERSON_NAME')
+      .some((v) => v.includes('한결'))).toBe(true);
+    const 재출현 = byType('담당: 박솔\n이번 건은 박솔 확인 후 010-1111-2222 로 회신', 'PERSON_NAME');
+    expect(재출현.filter((v) => v === '박솔')).toHaveLength(2);
   });
 });

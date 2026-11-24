@@ -133,8 +133,8 @@ describe('XLSX 처리 (기술명세서 Ⅳ-4)', () => {
     expect(sheet).toContain('<c r="A1" t="s"><v>0</v></c>');
   });
 
-  it('06_숫자셀_근태기록.xlsx의 모든 성명(2글자·외국인 포함)과 전화번호(국제전화·숫자셀 포함)를 누락 없이 비식별화한다', async () => {
-    const bytes = readFileSync(new URL('./fixtures/documents/06_숫자셀_근태기록.xlsx', import.meta.url));
+  it('04_근태_및_인사기록.xlsx의 모든 성명(2글자·외국인 포함)과 전화번호(국제전화·숫자셀 포함)를 누락 없이 비식별화한다', async () => {
+    const bytes = readFileSync(new URL('./documents/04_근태_및_인사기록.xlsx', import.meta.url));
     const parsed = parseZipDocument(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), 'xlsx');
     resetIdCounter();
     const candidates = analyze(parsed);
@@ -317,5 +317,120 @@ describe('ZIP 보안 검증 (NFR-007)', () => {
     expect(central).toBeGreaterThan(0);
     view.setUint32(central + 24, 301 * 1024 * 1024, true);
     expect(() => parseZipDocument(bytes.buffer, 'xlsx')).toThrow(/압축해제 크기/);
+  });
+});
+
+describe('test/documents 통합 시험 문서 (DOCX·HWPX)', () => {
+  it('03_개인정보_실태점검_회의록.docx의 본문·표·머리글을 추출하고 비식별화한다', async () => {
+    const bytes = readFileSync(new URL('./documents/03_개인정보_실태점검_회의록.docx', import.meta.url));
+    const parsed = parseZipDocument(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), 'docx');
+    expect(parsed.meta.tableCount).toBe(4);
+    expect(parsed.text).toContain('김서연');
+    expect(parsed.text).toContain('900101-1234567');
+
+    const { applied } = deidentify(parsed);
+    expect(applied.some((c) => c.originalText === '900101-1234567')).toBe(true);
+    const blob = buildZipResult(parsed, applied);
+    const out = unzipSync(new Uint8Array(await blob.arrayBuffer()));
+    expect(strFromU8(out['word/document.xml'])).not.toContain('900101-1234567');
+  });
+
+  it('05_업무협조_및_점검보고서.hwpx의 본문·표 텍스트를 추출하고 비식별화한다', async () => {
+    const bytes = readFileSync(new URL('./documents/05_업무협조_및_점검보고서.hwpx', import.meta.url));
+    const parsed = parseZipDocument(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), 'hwpx');
+    expect(parsed.text).toContain('김서연');
+    expect(parsed.text).toContain('900101-1234567');
+    expect(parsed.text).toContain('응우옌 티 흐엉');
+
+    const { applied } = deidentify(parsed);
+    expect(applied.some((c) => c.originalText === '900101-1234567')).toBe(true);
+    const blob = buildZipResult(parsed, applied);
+    const out = unzipSync(new Uint8Array(await blob.arrayBuffer()));
+    const sec = strFromU8(out['Contents/section0.xml']);
+    expect(sec).toContain('<hp:tbl');
+    expect(sec).not.toContain('900101-1234567');
+  });
+
+  it('05 HWPX 시험 문서는 한글에서 글자가 겹치지 않도록 글자 모양을 모두 정의한다', async () => {
+    const bytes = readFileSync(new URL('./documents/05_업무협조_및_점검보고서.hwpx', import.meta.url));
+    const parsed = parseZipDocument(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), 'hwpx');
+    const { applied } = deidentify(parsed);
+    const blob = buildZipResult(parsed, applied);
+    const out = unzipSync(new Uint8Array(await blob.arrayBuffer()));
+    const header = strFromU8(out['Contents/header.xml']);
+
+    // 처리 과정은 글자 모양 정의를 변경하지 않는다
+    expect(header).toBe(strFromU8(parsed.entries['Contents/header.xml']));
+
+    const charProps = [...header.matchAll(/<hh:charPr\b[^>]*>[\s\S]*?<\/hh:charPr>/g)].map((m) => m[0]);
+    expect(charProps.length).toBeGreaterThan(0);
+    for (const charPr of charProps) {
+      // 장평·상대 크기가 없으면 한글이 0%로 해석해 글자를 한 점에 겹쳐 그린다
+      expect(charPr).toMatch(/<hh:ratio\b[^>]*hangul="100"/);
+      expect(charPr).toMatch(/<hh:relSz\b[^>]*hangul="100"/);
+      // 글자 테두리는 표 테두리(SOLID)를 참조하면 안 된다
+      const fillId = /borderFillIDRef="(\d+)"/.exec(charPr)[1];
+      const fill = new RegExp(`<hh:borderFill id="${fillId}"[\\s\\S]*?</hh:borderFill>`).exec(header)[0];
+      expect(fill).not.toContain('type="SOLID"');
+    }
+    for (const lang of ['HANGUL', 'LATIN', 'HANJA', 'JAPANESE', 'OTHER', 'SYMBOL', 'USER']) {
+      expect(header).toContain(`<hh:fontface lang="${lang}"`);
+    }
+  });
+});
+
+describe('HWPX 미리보기 개인정보 제거', () => {
+  it('결과 파일의 미리보기 문자열과 이미지에 원본 내용이 남지 않는다', async () => {
+    const original = unzipSync(new Uint8Array(makeHwpx()));
+    const originalImage = strToU8('원본 첫 쪽 그림 김철수');
+    const bytes = zipSync({
+      ...original,
+      'Preview/PrvText.txt': strToU8('신청인 김철수 (010-9876-5432)'),
+      'Preview/PrvImage.png': originalImage,
+    });
+    const parsed = parseZipDocument(bytes.buffer, 'hwpx');
+    const { applied } = deidentify(parsed);
+    const blob = buildZipResult(parsed, applied);
+    const out = unzipSync(new Uint8Array(await blob.arrayBuffer()));
+
+    // container.xml이 참조할 수 있으므로 항목은 유지하고 내용만 제거한다
+    expect(out['Preview/PrvText.txt']).toHaveLength(0);
+    expect(strFromU8(out['Preview/PrvImage.png'], true)).not.toContain('김철수');
+    expect([...out['Preview/PrvImage.png'].slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    for (const [name, data] of Object.entries(out)) {
+      expect(strFromU8(data, true), name).not.toContain('010-9876-5432');
+    }
+  });
+
+  it('문서 속성의 작성자·마지막 저장자를 비우고 다른 속성은 유지한다', async () => {
+    const original = unzipSync(new Uint8Array(makeHwpx()));
+    const hpf = '<opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:metadata><opf:title>보고서</opf:title>'
+      + '<opf:meta name="creator" content="text">작성자계정</opf:meta>'
+      + '<opf:meta name="subject" content="text"/>'
+      + '<opf:meta name="lastsaveby" content="text">저장자계정</opf:meta>'
+      + '<opf:meta name="CreatedDate" content="text">2026-11-24T03:08:49Z</opf:meta>'
+      + '</opf:metadata></opf:package>';
+    const parsed = parseZipDocument(zipSync({ ...original, 'Contents/content.hpf': strToU8(hpf) }).buffer, 'hwpx');
+    const { applied } = deidentify(parsed);
+    const out = unzipSync(new Uint8Array(await buildZipResult(parsed, applied).arrayBuffer()));
+    const result = strFromU8(out['Contents/content.hpf']);
+
+    expect(result).not.toContain('작성자계정');
+    expect(result).not.toContain('저장자계정');
+    expect(result).toContain('<opf:meta name="creator" content="text"/>');
+    expect(result).toContain('<opf:meta name="lastsaveby" content="text"/>');
+    expect(result).toContain('<opf:title>보고서</opf:title>');
+    expect(result).toContain('<opf:meta name="subject" content="text"/>');
+    expect(result).toContain('2026-11-24T03:08:49Z');
+  });
+
+  it('작성자가 비어 있는 self-closing 항목 뒤의 속성을 훼손하지 않는다', async () => {
+    const original = unzipSync(new Uint8Array(makeHwpx()));
+    const hpf = '<opf:metadata><opf:meta name="creator" content="text"/>'
+      + '<opf:meta name="date" content="text">2026년 11월 24일</opf:meta></opf:metadata>';
+    const parsed = parseZipDocument(zipSync({ ...original, 'Contents/content.hpf': strToU8(hpf) }).buffer, 'hwpx');
+    const { applied } = deidentify(parsed);
+    const out = unzipSync(new Uint8Array(await buildZipResult(parsed, applied).arrayBuffer()));
+    expect(strFromU8(out['Contents/content.hpf'])).toBe(hpf);
   });
 });
