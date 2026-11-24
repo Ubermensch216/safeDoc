@@ -27,6 +27,9 @@ export function buildAiAudit(aiStats) {
     failedVerifications: aiStats.failedVerifications,
     splitChunks: aiStats.splitChunks || 0,
     truncatedChunks: aiStats.truncatedChunks || 0,
+    // AI가 검사하지 못한 범위(문서 오프셋과 사유만 — 원문은 남기지 않는다)
+    uncoveredRanges: (aiStats.uncoveredRanges || []).map(({ start, end, reason }) => ({ start, end, reason })),
+    uncoveredChars: aiStats.uncoveredChars || 0,
     truncated: aiStats.truncated,
     elapsedMs: aiStats.elapsedMs,
     stopReason: aiStats.stopReason,

@@ -7,6 +7,7 @@
 import { escapeHtml } from './dom.js';
 import { PII_TYPES, confidenceLabel } from '../detect/types.js';
 import { REVIEW_STATES } from '../core/reviewState.js';
+import { UNCOVERED_REASON_LABELS } from '../ai/aiDetect.js';
 
 // 화면 응답성 유지 (NFR-104)
 export const PREVIEW_CHAR_LIMIT = 200000;
@@ -31,11 +32,20 @@ function markTitle(c) {
   return parts.join(' — ');
 }
 
+// AI 미검사 구간의 시작 표지. 글자 대신 CSS ::before로 "AI 미검사"를 그린다.
+// 텍스트 노드를 넣으면 드래그로 후보를 추가할 때의 글자 위치 계산이 어긋나므로 빈 요소로 둔다.
+function gapStartMarker(gap) {
+  const reason = UNCOVERED_REASON_LABELS[gap.reason] || 'AI가 검사하지 못함';
+  return `<span class="ai-gap-start" data-gap-start="${gap.abs}" title="AI 미검사 구간 — ${escapeHtml(reason)}. 직접 확인하십시오."></span>`;
+}
+
 // 문서 텍스트 + 후보 목록 → 강조된 HTML (FR-401)
+// gaps: AI가 검사하지 못한 범위 [{ start, end, reason }] (문서 전체 기준). 빗금 배경과 시작 표지로 표시한다.
 export function buildPreviewHtml(text, candidates, {
   start = 0,
   limit = PREVIEW_CHAR_LIMIT,
   includeNotice = true,
+  gaps = [],
 } = {}) {
   const safeStart = Math.max(0, Math.min(text.length, start));
   const endOffset = Math.min(text.length, safeStart + limit);
@@ -46,20 +56,52 @@ export function buildPreviewHtml(text, candidates, {
     .slice()
     .sort((a, b) => a.start - b.start);
 
+  // 표시 구간 기준 위치로 바꾼다. startsHere: 시작점이 이 표시 구간 안에 있어 표지를 그릴지 여부
+  const viewGaps = gaps
+    .map((g) => ({
+      s: Math.max(0, g.start - safeStart),
+      e: Math.min(view.length, g.end - safeStart),
+      abs: g.start,
+      reason: g.reason,
+      startsHere: g.start >= safeStart && g.start < endOffset,
+    }))
+    .filter((g) => g.e > g.s)
+    .sort((a, b) => a.s - b.s);
+
+  // 후보가 아닌 평문 [a, b)를 미검사 구간 기준으로 나눠 그린다
+  const plain = (a, b) => {
+    let out = '';
+    let p = a;
+    for (const g of viewGaps) {
+      if (g.e <= p || g.s >= b) continue;
+      const s = Math.max(g.s, p);
+      const e = Math.min(g.e, b);
+      if (s > p) out += escapeHtml(view.slice(p, s));
+      if (s === g.s && g.startsHere) out += gapStartMarker(g);
+      out += `<span class="ai-gap">${escapeHtml(view.slice(s, e))}</span>`;
+      p = e;
+    }
+    if (p < b) out += escapeHtml(view.slice(p, b));
+    return out;
+  };
+
   let html = '';
   let pos = 0;
   for (const c of sorted) {
     const relativeStart = Math.max(0, c.start - safeStart);
     if (relativeStart < pos) continue; // 중첩 방어 (병합 단계에서 정리되지만 한 번 더 확인)
-    html += escapeHtml(view.slice(pos, relativeStart));
+    html += plain(pos, relativeStart);
     const end = Math.min(c.end - safeStart, view.length);
+    // 미검사 구간이 이 후보 안에서 시작하면 표지를 후보 앞에 둔다
+    const inGap = viewGaps.filter((g) => g.s < end && g.e > relativeStart);
+    for (const g of inGap) if (g.startsHere && g.s >= relativeStart) html += gapStartMarker(g);
     // 강조는 클릭하면 해당 후보로 이동하는 조작 요소다. 키보드로도 닿아야 한다.
-    html += `<mark class="${markClass(c)}" data-id="${c.id}" title="${escapeHtml(markTitle(c))}"`
+    html += `<mark class="${markClass(c)}${inGap.length ? ' in-gap' : ''}" data-id="${c.id}" title="${escapeHtml(markTitle(c))}"`
       + ` role="button" tabindex="0" aria-label="${escapeHtml(`${view.slice(relativeStart, end)} — ${markTitle(c)}`)}">`
       + `${escapeHtml(view.slice(relativeStart, end))}</mark>`;
     pos = end;
   }
-  html += escapeHtml(view.slice(pos));
+  html += plain(pos, view.length);
 
   if (truncated && includeNotice) {
     html += `\n\n<span class="muted">… ${safeStart.toLocaleString()}~${endOffset.toLocaleString()}자 구간만 표시됩니다. `
@@ -78,6 +120,33 @@ export class PreviewHighlighter {
     this.text = '';
     this.candidates = [];
     this.focusedId = null;
+    this.gaps = [];
+  }
+
+  // AI가 검사하지 못한 범위를 설정하고 바로 다시 그린다
+  setGaps(gaps) {
+    this.gaps = Array.isArray(gaps) ? gaps : [];
+    if (this.text) this.renderNow(this.text, this.candidates);
+  }
+
+  // index번째 미검사 구간으로 본문을 옮긴다. 구간이 표시 범위 밖이면 표시 범위를 옮겨 다시 그린다.
+  scrollToGap(index) {
+    const gap = this.gaps[index];
+    if (!gap) return false;
+    const windowEnd = this.windowStart + PREVIEW_CHAR_LIMIT;
+    if (gap.start < this.windowStart || gap.start >= windowEnd) {
+      this.renderNow(this.text, this.candidates, { start: Math.max(0, gap.start - Math.floor(PREVIEW_CHAR_LIMIT / 2)) });
+    }
+    const target = this.el.querySelector(`.ai-gap-start[data-gap-start="${gap.start}"]`)
+      || this.el.querySelector('.ai-gap');
+    if (!target) return false;
+    this.el.querySelectorAll('.ai-gap-start.current').forEach((m) => m.classList.remove('current'));
+    target.classList.add('current');
+    const box = this.el.getBoundingClientRect();
+    const rect = target.getBoundingClientRect();
+    // 구간 시작이 화면 위쪽 1/3 지점에 오도록 옮긴다 (아래로 이어지는 본문을 읽기 쉽게)
+    this.el.scrollTop += rect.top - box.top - box.height / 3;
+    return true;
   }
 
   // 사용자가 미리보기에서 문자열을 드래그하는 중이면 다시 그리지 않는다
@@ -96,6 +165,7 @@ export class PreviewHighlighter {
     this.el.innerHTML = buildPreviewHtml(text, candidates, {
       start: this.windowStart,
       includeNotice: false,
+      gaps: this.gaps,
     });
     this.el.scrollTop = top;
     this.el.scrollLeft = left;
@@ -174,6 +244,7 @@ export class PreviewHighlighter {
     this.text = '';
     this.candidates = [];
     this.focusedId = null;
+    this.gaps = [];
     this.onWindowChange?.({ start: 0, end: 0, total: 0 });
   }
 

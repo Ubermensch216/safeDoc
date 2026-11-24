@@ -151,6 +151,28 @@ describe('청크 분석 요청', () => {
     expect(body.options.temperature).toBe(0); // 모델 기본값 1을 반드시 덮어써야 한다
     expect(body.think).toBe(false);
     expect(body.keep_alive).toBe('10m'); // 7.2GB 재로딩 방지
-    expect(body.options.num_ctx).toBe(4096);
+    // 시스템 프롬프트(1,507토큰) + 표가 많은 3,000자 구간(최대 4,100토큰) + 출력을 담아야 한다
+    expect(body.options.num_ctx).toBe(8192);
+    expect(body.options.num_predict).toBeGreaterThanOrEqual(3072);
+  });
+
+  it('탐지와 검증은 같은 컨텍스트 창을 쓴다 (다르면 Ollama가 모델을 다시 올린다)', async () => {
+    const sizes = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      sizes.push(JSON.parse(init.body).options.num_ctx);
+      return jsonRes({ message: { content: '{"items":[],"judgements":[]}' } });
+    }));
+    await detectChunk('문서', {});
+    await verifyChunk('문서', ['홍길동'], {});
+    expect(new Set(sizes).size).toBe(1);
+  });
+
+  it('입력이 컨텍스트보다 길어 거부되면 overflow로 구분한다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      text: async () => '{"error":"the prompt is longer than the context length currently available to the model"}',
+    })));
+    await expect(detectChunk('문서', {})).rejects.toMatchObject({ kind: 'overflow' });
   });
 });

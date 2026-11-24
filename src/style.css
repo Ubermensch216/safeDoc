@@ -617,6 +617,59 @@ kbd {
 }
 .preview-content:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); border-radius: 0; }
 
+/* AI가 검사하지 못한 구간 — 미확인(주황)과 섞이지 않도록 위험색 빗금으로 표시한다 */
+.ai-gap {
+  background: repeating-linear-gradient(135deg,
+    color-mix(in srgb, var(--danger) 16%, transparent) 0 6px,
+    color-mix(in srgb, var(--danger) 5%, transparent) 6px 12px);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+mark.pii.in-gap { outline: 1px dashed var(--danger); outline-offset: 1px; }
+/* 구간 시작 표지: 글자가 아니라 ::before로 그려 드래그 위치 계산에 끼어들지 않는다 */
+.ai-gap-start::before {
+  content: 'AI 미검사';
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  background: var(--danger);
+  color: var(--surface);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  vertical-align: 1px;
+  user-select: none;
+}
+.ai-gap-start.current::before { box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 35%, transparent); }
+
+.ai-gap-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: 8px var(--s5);
+  background: var(--danger-soft);
+  border-bottom: 1px solid var(--danger-line);
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+.ai-gap-bar p { flex: 1; min-width: 0; line-height: 1.45; }
+.ai-gap-bar p span { color: var(--ink-2); }
+.ai-gap-bar .btn { flex: none; border-color: var(--danger-line); color: var(--danger); }
+.ai-gap-icon {
+  width: 20px; height: 20px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--danger);
+  color: var(--surface);
+  font-size: 12px;
+  font-weight: 800;
+}
+.swatch.ai-gap { border-color: var(--danger); }
+
 mark.pii {
   padding: 1px 2px;
   background: var(--ok-soft);
@@ -1023,7 +1076,8 @@ mark.replaced { padding: 1px 2px; background: var(--ok-soft); border-radius: 2px
   .review-layout { margin: var(--s3) var(--s3) var(--s4); }
   .ai-banner { margin: var(--s3) var(--s3) 0; padding: 10px var(--s3); }
   .ai-banner-copy span { white-space: normal; }
-  .pane-head, .doc-tools, .cand-toolbar, .doc-legend { padding-inline: var(--s3); }
+  .pane-head, .doc-tools, .cand-toolbar, .doc-legend, .ai-gap-bar { padding-inline: var(--s3); }
+  .ai-gap-bar { flex-wrap: wrap; }
   .cand-header, .cand { padding: 0 var(--s3); }
   .inspector { padding-inline: var(--s3); }
   .page { padding: var(--s4) var(--s3) var(--s6); }

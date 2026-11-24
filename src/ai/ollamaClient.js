@@ -12,14 +12,26 @@ import {
 export const DEFAULT_ENDPOINT = 'http://localhost:11434';
 export const DEFAULT_MODEL = 'gemma4:e2b';
 
-// 실측(청크 3,000자 기준 5~7초) 대비 넉넉하게 잡는다
-const REQUEST_TIMEOUT_MS = 120000;
+// 컨텍스트 창(입력+출력 합계)과 출력 상한 — 실측 근거 (2026-11-24, gemma4:e2b)
+// - 시스템 프롬프트만 1,507토큰이다. 3,000자 구간의 입력은 표가 많은 문서에서 4,000토큰을 넘는다
+//   (CSV 4,071 · XLSX 4,096 초과 → 4,096 창에서는 HTTP 400으로 요청 자체가 거부됐다).
+// - 탐지 결과 항목 하나가 JSON으로 약 48토큰이다. 표가 많은 문서는 1,200자에 20건이 넘어
+//   출력 상한 1,024토큰에서 잘렸다. 3,000자 구간에는 2,000~3,000토큰이 필요하다.
+// 탐지와 검증은 같은 창 크기를 써야 한다. 크기가 바뀌면 Ollama가 모델을 다시 올린다.
+export const NUM_CTX = 8192;
+const DETECT_NUM_PREDICT = 4096;
+// 검증은 최대 30개 값의 판정이다. 판정 하나가 약 35토큰이라 1,024에서는 잘렸다(실측).
+const VERIFY_NUM_PREDICT = 2048;
+
+// CPU만 쓰는 PC에서 출력 4,096토큰은 약 3분이 걸린다(24 tok/s 실측). 그보다 넉넉하게 잡는다.
+const REQUEST_TIMEOUT_MS = 300000;
 const HEALTH_TIMEOUT_MS = 3000;
 
 export class AiError extends Error {
   constructor(kind, message) {
     super(message);
-    this.kind = kind; // 'offline' | 'model' | 'timeout' | 'aborted' | 'response'
+    // 'overflow'는 입력이 컨텍스트 창보다 길어 거부된 경우다. 호출자가 구간을 나눠 다시 묻는다.
+    this.kind = kind; // 'offline' | 'model' | 'timeout' | 'aborted' | 'response' | 'overflow'
   }
 }
 
@@ -115,8 +127,8 @@ async function chatJson(systemPrompt, userMessage, schema, {
   endpoint = DEFAULT_ENDPOINT,
   model = DEFAULT_MODEL,
   signal,
-  numCtx = 4096,
-  numPredict = 1024,
+  numCtx = NUM_CTX,
+  numPredict = DETECT_NUM_PREDICT,
   arrayKey = null,
 } = {}) {
   const body = {
@@ -158,6 +170,11 @@ async function chatJson(systemPrompt, userMessage, schema, {
   cleanup();
 
   if (!res.ok) {
+    let detail = '';
+    try { detail = await res.text(); } catch { /* 본문이 없어도 상태 코드로 판단한다 */ }
+    if (/context length|longer than the context|exceeds? (the )?context/i.test(detail)) {
+      throw new AiError('overflow', '구간이 AI 입력 한도를 넘었습니다.');
+    }
     throw new AiError('response', `AI 엔진이 오류를 반환했습니다. (HTTP ${res.status})`);
   }
 
@@ -216,7 +233,7 @@ export async function verifyChunk(chunkText, values, options = {}) {
   if (!values || values.length === 0) return { judgements: [], metrics: null, truncated: false };
   const { data, metrics, truncated } = await chatJson(
     VERIFY_SYSTEM_PROMPT, buildVerifyMessage(chunkText, values), VERIFY_SCHEMA,
-    { ...options, numPredict: 700, arrayKey: 'judgements' },
+    { ...options, numPredict: VERIFY_NUM_PREDICT, arrayKey: 'judgements' },
   );
   return { judgements: Array.isArray(data?.judgements) ? data.judgements : [], metrics, truncated };
 }

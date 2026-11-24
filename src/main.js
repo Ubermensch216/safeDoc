@@ -17,7 +17,7 @@ import { $, $$, toast, showError, showScreen, escapeHtml } from './ui/dom.js';
 import { buildPreviewHtml } from './ui/highlight.js';
 import { renderAfterHtml, renderSummaryHtml, renderSummaryDetailHtml, renderDocMeta } from './ui/render.js';
 import { loadStoredPolicies } from './ui/storage.js';
-import { describeIncomplete } from './ai/aiDetect.js';
+import { describeIncomplete, describeUncovered } from './ai/aiDetect.js';
 import { linkScroll } from './ui/syncScroll.js';
 import { AiController } from './ui/aiController.js';
 import { ReviewController } from './ui/reviewController.js';
@@ -51,9 +51,12 @@ function init() {
     },
     onCancelAnalyze: () => { analyzeCancelled = true; },
     onCancelAi: async () => {
-      await ai.stop({ wait: true });
+      const stats = await ai.stop({ wait: true });
       ai.setBadge('off', 'AI 중단됨');
-      toast('AI 탐지를 중단했습니다. 규칙 기반 결과는 그대로 유지됩니다.');
+      const gaps = describeUncovered(stats);
+      toast(gaps
+        ? `AI 탐지를 중단했습니다. ${gaps}을 문서에 빗금으로 표시했습니다. 직접 확인해 주십시오.`
+        : 'AI 탐지를 중단했습니다. 규칙 기반 결과는 그대로 유지됩니다.');
     },
   });
 
@@ -73,6 +76,7 @@ function init() {
     onSchedulePreview: (text, candidates) => review.schedulePreview(text, candidates),
     onRenderPreviewNow: (text, candidates) => review.renderPreviewNow(text, candidates),
     onReadOnlyChange: (on) => review.setReadOnly(on),
+    onAiGapsChange: (ranges) => review.setAiGaps(ranges),
   });
 
   review.setPolicies(session.typePolicies);
@@ -263,9 +267,13 @@ function renderConfirmScreen() {
 
   const aiWarning = $('#confirm-ai-warning');
   const aiRunning = ai.isRunning();
-  aiWarning.hidden = !aiRunning;
+  const gaps = aiRunning ? '' : describeUncovered(ai.stats);
+  aiWarning.hidden = !aiRunning && !gaps;
   if (aiRunning) {
     aiWarning.textContent = 'AI 추가 탐지가 아직 진행 중입니다. 지금 실행하면 AI 검사를 중단하고 미완료 상태를 처리 기록에 남깁니다.';
+  } else if (gaps) {
+    // 미검사 구간은 사람이 직접 봐야만 안전하다. 실행 직전에 한 번 더 알린다.
+    aiWarning.textContent = `${gaps}이 있습니다. 검토 화면에서 'AI 미검사'로 표시된 빗금 부분을 직접 확인했는지 다시 확인하십시오.`;
   }
   $('#final-confirm').checked = false;
   $('#btn-execute').disabled = true;
@@ -322,6 +330,7 @@ async function executeDeidentify() {
     if (aiStats && !aiStats.completed) {
       aiWarn.innerHTML = `⚠ <strong>AI 검사가 완료되지 않았습니다.</strong> `
         + `${escapeHtml(describeIncomplete(aiStats))} · ${aiStats.chunksCompleted}/${aiStats.chunksPlanned} 구간을 끝까지 검사했습니다. `
+        + `${describeUncovered(aiStats) ? `${escapeHtml(describeUncovered(aiStats))}은 처리 내역 보고서에 위치가 기록됩니다. ` : ''}`
         + '검사하지 않은 구간에 개인정보가 남아 있을 수 있습니다.';
       aiWarn.hidden = false;
     } else {

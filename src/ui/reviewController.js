@@ -160,6 +160,30 @@ export class ReviewController {
     $('#search-input').value = '';
     this.#inspectorHtml = '';
     $('#cand-inspector').innerHTML = '';
+    this.setAiGaps([]);
+  }
+
+  // AI가 검사하지 못한 범위를 문서 위에 표시하고, 차례로 찾아가는 안내 줄을 보여 준다.
+  setAiGaps(ranges) {
+    this.aiGaps = Array.isArray(ranges) ? ranges : [];
+    this.aiGapIndex = -1;
+    this.highlighter.setGaps(this.aiGaps);
+    const count = this.aiGaps.length;
+    const chars = this.aiGaps.reduce((sum, r) => sum + (r.end - r.start), 0);
+    $('#ai-gap-bar').hidden = count === 0;
+    $('#legend-ai-gap').hidden = count === 0;
+    $('#ai-gap-text').textContent = count
+      ? `AI가 검사하지 못한 구간 ${count}곳(약 ${chars.toLocaleString()}자)`
+      : '';
+    $('#btn-next-gap').textContent = count > 1 ? `다음 미검사 구간 (0/${count})` : '미검사 구간으로 이동';
+  }
+
+  #goToNextGap() {
+    const count = this.aiGaps?.length || 0;
+    if (count === 0) return;
+    this.aiGapIndex = (this.aiGapIndex + 1) % count;
+    this.highlighter.scrollToGap(this.aiGapIndex);
+    if (count > 1) $('#btn-next-gap').textContent = `다음 미검사 구간 (${this.aiGapIndex + 1}/${count})`;
   }
 
   #findCandidate(id) {
@@ -279,6 +303,7 @@ export class ReviewController {
   #bindPreviewEvents() {
     $('#btn-preview-prev').addEventListener('click', () => this.highlighter.shiftWindow(-1));
     $('#btn-preview-next').addEventListener('click', () => this.highlighter.shiftWindow(1));
+    $('#btn-next-gap').addEventListener('click', () => this.#goToNextGap());
 
     const preview = $('#preview');
     const popover = $('#selection-popover');

@@ -2,18 +2,22 @@
 
 import { ensureReviewStates } from '../core/reviewState.js';
 import { checkAvailability } from '../ai/ollamaClient.js';
-import { runAiDetection, createAiStats, estimateChunks, describeIncomplete, DEFAULT_MAX_CHUNKS } from '../ai/aiDetect.js';
+import {
+  runAiDetection, createAiStats, estimateChunks, describeIncomplete, describeUncovered, DEFAULT_MAX_CHUNKS,
+} from '../ai/aiDetect.js';
 import { AiRunLifecycle } from '../ai/lifecycle.js';
 import { $, toast, showError, announce, setWorkflowStep } from './dom.js';
 
 export class AiController {
-  constructor({ session, getSettings, onSyncReview, onSchedulePreview, onRenderPreviewNow, onReadOnlyChange }) {
+  constructor({ session, getSettings, onSyncReview, onSchedulePreview, onRenderPreviewNow, onReadOnlyChange, onAiGapsChange }) {
     this.session = session;
     this.getSettings = getSettings;
     this.onSyncReview = onSyncReview;
     this.onSchedulePreview = onSchedulePreview;
     this.onRenderPreviewNow = onRenderPreviewNow;
     this.onReadOnlyChange = onReadOnlyChange || (() => {});
+    // AI가 검사하지 못한 범위를 검토 화면에 넘긴다 (사용자가 직접 점검하도록 표시)
+    this.onAiGapsChange = onAiGapsChange || (() => {});
 
     this.lifecycle = new AiRunLifecycle();
     this.stats = null;
@@ -99,7 +103,11 @@ export class AiController {
     this.#exitPhase({ skipped: true });
     if (!wait) return null;
     const stats = await stopped;
-    if (stats) this.stats = stats;
+    if (stats) {
+      this.stats = stats;
+      // 중단하면 그 뒤 구간은 AI가 검사하지 않았다. 검토 화면에 표시한다.
+      this.onAiGapsChange(stats.uncoveredRanges || []);
+    }
     return stats;
   }
 
@@ -195,6 +203,8 @@ export class AiController {
       if (this.lifecycle.isCurrent(run) && this.session.parsed === parsed) {
         // 3단계 종료 → 4단계(개인정보 검토) 활성화. AI가 끝까지 끝나지 못했으면 3단계를 '–'로 표시한다.
         this.#exitPhase({ skipped: !this.stats?.completed });
+        // AI가 검사하지 못한 범위를 본문에 표시한다 (아래 다시 그리기에 반영된다)
+        this.onAiGapsChange(this.stats?.uncoveredRanges || []);
         this.onRenderPreviewNow(parsed.text, candidates);
         // AI 완료 시점에만 한 번 재정렬한다 (청크마다 재정렬하면 카드가 계속 움직임)
         this.onSyncReview({ resort: true });
@@ -217,7 +227,9 @@ export class AiController {
       announce('AI 탐지를 중단했습니다.');
     } else {
       this.setBadge('off', 'AI 미완료');
-      toast(`AI 탐지가 끝까지 완료되지 않았습니다. ${describeIncomplete(this.stats)}. 결과에 기록됩니다.`, true);
+      const gaps = describeUncovered(this.stats);
+      toast(`AI 탐지가 끝까지 완료되지 않았습니다. ${describeIncomplete(this.stats)}.`
+        + (gaps ? ` ${gaps}을 문서에 빗금으로 표시했으니 직접 확인해 주십시오.` : ' 결과에 기록됩니다.'), true);
       announce('AI 탐지가 완료되지 않았습니다.');
     }
   }

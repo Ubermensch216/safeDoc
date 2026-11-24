@@ -160,6 +160,11 @@
                   <select id="search-type" aria-label="지정할 개인정보 유형"></select>
                   <button id="btn-search-add" class="btn small">모두 지정</button>
                 </div>
+                <div id="ai-gap-bar" class="ai-gap-bar" role="status" hidden>
+                  <span class="ai-gap-icon" aria-hidden="true">!</span>
+                  <p><strong id="ai-gap-text"></strong> <span>빗금 친 부분에 개인정보가 남아 있는지 직접 확인하십시오.</span></p>
+                  <button id="btn-next-gap" class="btn tiny">다음 미검사 구간</button>
+                </div>
                 <div class="preview-wrap">
                   <div id="preview" class="preview-content" tabindex="0" aria-label="문서 본문"></div>
                   <div id="selection-popover" class="selection-popover" hidden>
@@ -171,6 +176,7 @@
                   <span class="legend-item"><i class="swatch pending"></i>미확인</span>
                   <span class="legend-item"><i class="swatch process"></i>처리</span>
                   <span class="legend-item"><i class="swatch excluded"></i>제외</span>
+                  <span class="legend-item" id="legend-ai-gap" hidden><i class="swatch ai-gap"></i>AI 미검사</span>
                   <span class="legend-help">본문을 드래그하면 후보로 직접 추가할 수 있습니다.</span>
                 </footer>
               </section>
